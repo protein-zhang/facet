@@ -1,8 +1,9 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
 const http=require('node:http'),https=require('node:https'),zlib=require('node:zlib');
-const fs=require('node:fs'),path=require('node:path'),{X509Certificate,createHash}=require('node:crypto');
+const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),{X509Certificate,createHash}=require('node:crypto');
 const {safeFetch,checkedHostname,networkURL,checkServerIdentity,canDecodeBrotli}=require('../src/main/safe-http.cjs');
+const {sourceHash}=require('../src/main/environment-browser-channel.cjs');
 const {downloadSubscription}=require('../src/main/subscription.cjs');
 const {completionRequest}=require('../src/main/ai-request.cjs');
 async function serve(t,handler){
@@ -97,4 +98,13 @@ test('bundled proxy bytes match the pinned security build and source',()=>{
  const sha=file=>createHash('sha256').update(fs.readFileSync(path.join(root,file))).digest('hex');
  assert.equal(record.version,release.version);assert.equal(record.sourceRef,release.sourceRef);assert.equal(record.goVersion,release.goVersion);
  assert.equal(sha(process.platform==='win32'?'mihomo.exe':'mihomo'),record.binarySHA256);assert.equal(sha('mihomo-source.tar.gz'),record.sourceSHA256);
+});
+test('private environment pipe source integrity is independent of Windows line endings',()=>{
+ const root=path.join(__dirname,'../resources/environment-pipe'),manifest=JSON.parse(fs.readFileSync(path.join(root,'manifest.json'),'utf8'));
+ assert.equal(sourceHash(path.join(root,'environment-pipe.cc')),manifest.sourceSHA256);
+ const lf=path.join(os.tmpdir(),'facet-environment-pipe-lf-'+process.pid),crlf=path.join(os.tmpdir(),'facet-environment-pipe-crlf-'+process.pid);
+ try{
+  fs.writeFileSync(lf,'first\nsecond\n');fs.writeFileSync(crlf,'first\r\nsecond\r\n');
+  assert.equal(sourceHash(lf),sourceHash(crlf));
+ }finally{fs.rmSync(lf,{force:true});fs.rmSync(crlf,{force:true});}
 });

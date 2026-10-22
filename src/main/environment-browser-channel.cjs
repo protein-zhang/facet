@@ -4,6 +4,7 @@
 const {EventEmitter}=require('node:events'),{StringDecoder}=require('node:string_decoder');
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),net=require('node:net');
 let active;
+function sourceHash(file){return crypto.createHash('sha256').update(fs.readFileSync(file,'utf8').replace(/\r\n/g,'\n')).digest('hex');}
 class BrowserChannel extends EventEmitter{
  constructor(){super();this.pending=new Map();this.sequence=0;this.closed=false;this.mode='';}
  receive(text){let value;try{value=JSON.parse(text);}catch{this.fail(Error('环境控制通道返回无效消息'));return;}
@@ -27,7 +28,7 @@ function pipeChannel(app,channel){
  const dir=require('./app-paths.cjs').resourcePath(app,'environment-pipe'),manifest=JSON.parse(fs.readFileSync(path.join(dir,'manifest.json'),'utf8'));
  const hash=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
  const binary=path.join(dir,'environment-pipe.node');
- if(manifest.platform!=='win32'||manifest.architecture!=='x64'||manifest.nodeApiVersion!==8||hash(binary)!==manifest.binarySHA256||hash(path.join(dir,'environment-pipe.cc'))!==manifest.sourceSHA256)
+ if(manifest.platform!=='win32'||manifest.architecture!=='x64'||manifest.nodeApiVersion!==8||hash(binary)!==manifest.binarySHA256||sourceHash(path.join(dir,'environment-pipe.cc'))!==manifest.sourceSHA256)
   throw Error('SharedWorker 私有通道组件校验失败，请重新构建环境管道组件');
  const native=require(binary),name='facet-environment-'+crypto.randomUUID();
  let writer,reader;
@@ -64,4 +65,4 @@ function prepareBrowserChannel(app){
  channel.ready.catch(error=>channel.fail(error));return channel;
 }
 function browserChannel(){if(!active)throw Error('SharedWorker 环境入口未在应用启动时准备');return active;}
-module.exports={prepareBrowserChannel,browserChannel};
+module.exports={prepareBrowserChannel,browserChannel,sourceHash};

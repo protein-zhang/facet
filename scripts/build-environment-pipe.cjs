@@ -1,5 +1,6 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto'),{execFileSync}=require('node:child_process');
+const {sourceHash}=require('../src/main/environment-browser-channel.cjs');
 if(process.platform!=='win32'||process.arch!=='x64')throw Error('Environment pipe build requires Windows x64');
 const latest=dir=>fs.readdirSync(dir,{withFileTypes:true}).filter(x=>x.isDirectory()).map(x=>x.name).sort((a,b)=>b.localeCompare(a,undefined,{numeric:true}))[0];
 const vswhere=path.join(process.env['ProgramFiles(x86)'],'Microsoft Visual Studio/Installer/vswhere.exe');
@@ -14,7 +15,7 @@ const root=path.resolve(__dirname,'../resources/environment-pipe'),tmp=fs.mkdtem
 const source=path.join(root,'environment-pipe.cc'),binary=path.join(root,'environment-pipe.node');
 const args=['/nologo','/LD','/MD','/O2','/W4','/WX','/wd4191','/EHsc','/std:c++17','/guard:cf',...['include'].map(x=>'/I'+path.join(vc,x)),...['ucrt','shared','um'].map(x=>'/I'+path.join(kit,'Include',sdk,x)),'/I'+headers,source,'/Fo'+path.join(tmp,'environment-pipe.obj'),'/link','/OUT:'+binary,'/IMPLIB:'+path.join(tmp,'environment-pipe.lib'),'/LIBPATH:'+path.join(vc,'lib/x64'),...['ucrt','um'].map(x=>'/LIBPATH:'+path.join(kit,'Lib',sdk,x,'x64')),'Advapi32.lib','/DYNAMICBASE','/NXCOMPAT'];
 try{process.stdout.write(execFileSync(path.join(vc,'bin/Hostx64/x64/cl.exe'),args,{windowsHide:true,encoding:'utf8'}));
- const hash=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
- fs.writeFileSync(path.join(root,'manifest.json'),JSON.stringify({version:1,platform:'win32',architecture:'x64',nodeApiVersion:8,sourceSHA256:hash(source),binarySHA256:hash(binary)},null,2)+'\n');
+ const binaryHash=crypto.createHash('sha256').update(fs.readFileSync(binary)).digest('hex');
+ fs.writeFileSync(path.join(root,'manifest.json'),JSON.stringify({version:1,platform:'win32',architecture:'x64',nodeApiVersion:8,sourceSHA256:sourceHash(source),binarySHA256:binaryHash},null,2)+'\n');
  console.log('Built and hashed private environment pipe helper');
 }finally{fs.rmSync(tmp,{recursive:true,force:true});}
