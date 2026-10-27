@@ -9,7 +9,7 @@ const {childEnvironment}=require('./electron-runtime.cjs');
 const buildManifest=path.resolve(__dirname,'../release/build-manifest.json');
 const executable=path.resolve(process.argv[2]||(fs.existsSync(buildManifest)?JSON.parse(fs.readFileSync(buildManifest,'utf8')).unpackedExecutable:'release/win-unpacked/Facet.exe'));
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'facet-installed-中文-'));
-const results=[],errors=[];let server,proxy,child,browser,ui,inspectorUrl,proxyHits=0,geoHits=0;
+const results=[],errors=[];let server,proxy,child,browser,ui,inspectorUrl,proxyHits=0,geoHits=0,aiUpload='';
 const sockets=new Set(),sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const pass=name=>{results.push(name);console.log('PASS '+name);};
 async function wait(fn,label,timeout=30000){const end=Date.now()+timeout;while(Date.now()<end){if(await fn())return;await sleep(50);}throw Error('Timeout: '+label);}
@@ -42,8 +42,11 @@ async function setIsolatedGeoEndpoint(url){
  // Only redirect the diagnostic destination in this isolated test process.
  assert.equal(await mainValue("process.getBuiltinModule('module').createRequire(process.resourcesPath+'/app.asar/package.json')('./src/main/diagnostics.cjs').TARGETS.ip="+JSON.stringify(url)),url);
 }
+// PowerShell 7 is optional on Windows; fall back to the built-in Windows PowerShell 5.1.
+// Bypass applies to this one process only so the read-only probe script can run under the default policy.
+async function runPowerShell(args,options){try{return await promisify(execFile)('pwsh.exe',args,options);}catch(e){if(e.code!=='ENOENT')throw e;return promisify(execFile)('powershell.exe',['-ExecutionPolicy','Bypass',...args],options);}}
 async function verifyTaskbar(){
- const native=JSON.parse((await promisify(execFile)('pwsh.exe',['-NoProfile','-File',path.join(__dirname,'../tests/window-identity-properties.ps1'),'-ProcessId',String(child.pid)],{encoding:'utf8',windowsHide:true,timeout:15000})).stdout);
+ const native=JSON.parse((await runPowerShell(['-NoProfile','-File',path.join(__dirname,'../tests/window-identity-properties.ps1'),'-ProcessId',String(child.pid)],{encoding:'utf8',windowsHide:true,timeout:15000})).stdout);
  assert.equal(native.pid,child.pid);assert.equal(native.appId,'Facet.MultiInstanceBrowser');
  assert.equal(native.icon,path.join(path.dirname(executable),'resources/facet.ico')+',0');
  assert.equal(native.command,'"'+executable+'"');assert.equal(native.name,'千面 Facet');
@@ -77,12 +80,47 @@ async function close(){
  await new Promise((resolve,reject)=>{closer.once('error',reject);closer.once('exit',code=>code===0?resolve():reject(Error('Test window close failed: '+code)));});
  await wait(()=>child.exitCode!==null,'installed application normal exit',15000);browser=null;ui=null;
 }
+async function verifyPackagedDsh(target){
+ let step=0,fixtureError,askOffered=false,usageRequested=false;const sample=path.join(root,'packaged-ai-upload.txt');fs.writeFileSync(sample,'PACKAGED_REAL_UPLOAD');
+ const model=http.createServer(async(req,res)=>{try{
+  let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);
+  if(step===0)askOffered=body.tools.some(t=>t.function.name==='ask_user_question');usageRequested||=body.stream_options?.include_usage===true;
+  assert(body.tools.every(t=>t.type==='function'&&t.function.parameters?.type==='object'));
+  const tool=body.messages.findLast(m=>m.role==='tool');let message;
+  if(step===0)message={content:null,tool_calls:[{id:'packaged-manual',type:'function',function:{name:'read_manual',arguments:JSON.stringify({document:'AI-AGENT.md'})}}]};
+  else if(step===1){assert(tool.content.includes('DeepSeek Harness'));message={content:null,tool_calls:[{id:'packaged-page',type:'function',function:{name:'observe',arguments:JSON.stringify({instanceId:target,full_text:true})}}]};}
+  else if(step===2){assert(tool.content.includes('REAL_INSTALLED_PAGE'),'Expected whole-page fixture text: '+tool.content.slice(0,500));message={tool_calls:[{id:'packaged-network',type:'function',function:{name:'network_log',arguments:JSON.stringify({instanceId:target,action:'start'})}}]};}
+  else if(step===3){assert(JSON.parse(tool.content).started);message={tool_calls:[{id:'packaged-script',type:'function',function:{name:'cdp_command',arguments:JSON.stringify({instanceId:target,method:'Runtime.evaluate',params:{expression:'fetch("/ai-probe").then(r=>r.json())',awaitPromise:true,returnByValue:true}})}}]};}
+  else if(step===4){assert.equal(JSON.parse(tool.content).result.result.value.retryAfterMs,25000);message={tool_calls:[{id:'packaged-read-network',type:'function',function:{name:'network_log',arguments:JSON.stringify({instanceId:target,action:'read'})}}]};}
+  else if(step===5){const row=JSON.parse(tool.content).items.find(x=>x.url.endsWith('/ai-probe'));assert(row&&row.status===200);message={tool_calls:[{id:'packaged-network-body',type:'function',function:{name:'network_log',arguments:JSON.stringify({instanceId:target,action:'body',requestId:row.requestId})}}]};}
+  else if(step===6){assert.equal(JSON.parse(JSON.parse(tool.content).body).retryAfterMs,25000);message={tool_calls:[{id:'packaged-upload',type:'function',function:{name:'upload_file',arguments:JSON.stringify({instanceId:target,selector:'#aiFile',files:[sample]})}}]};}
+  else if(step===7){assert(JSON.parse(tool.content).filled);message={tool_calls:[{id:'packaged-submit',type:'function',function:{name:'cdp_command',arguments:JSON.stringify({instanceId:target,method:'Runtime.evaluate',params:{expression:'document.querySelector("#aiFile").files[0].text().then(text=>fetch("/ai-upload",{method:"POST",body:text})).then(r=>r.text())',awaitPromise:true,returnByValue:true}})}}]};}
+  else {assert.equal(JSON.parse(tool.content).result.result.value,'received');assert.equal(aiUpload,'PACKAGED_REAL_UPLOAD');message={content:'PACKAGED_DSH_VERIFIED：已核对说明书、真实网页、脚本、网络响应和文件上传。'};}
+  step++;res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message:{role:'assistant',...message}}]}));
+ }catch(e){fixtureError=e;res.statusCode=500;res.end('packaged fixture error');}});
+ await new Promise(r=>model.listen(0,'127.0.0.1',r));
+ try{
+  await call('ai-settings',{settings:{baseURL:'http://127.0.0.1:'+model.address().port+'/v1',model:'packaged-dsh-protocol',maxRounds:0}});
+  await call('ai-run',{prompt:'读取说明书并验收真实网页控制、网络响应和文件上传',ids:[target],permission:'full'});
+  await wait(async()=>!(await call('ai-state')).busy,'packaged official DSH completion',45000);if(fixtureError)throw fixtureError;
+  const state=await call('ai-state');assert.equal(state.engine.name,'DeepSeek Harness');assert.equal(state.engine.version,'0.2.1-rc.2');assert.equal(state.task.status,'已完成',state.task.entries.filter(e=>e.kind==='system').map(e=>e.text).join('\n'));assert.equal(step,9);assert(!state.task.pending);
+  assert(state.task.entries.some(e=>e.kind==='assistant'&&e.text.includes('PACKAGED_DSH_VERIFIED')));
+  assert(state.task.entries.some(e=>e.kind==='tool'&&e.text.startsWith('observe：')));
+  pass('Packaged ASAR official DSH executes real manual, browser, scripts, Network body and HTTP file upload without approval');
+  // The DSH backend plugins and the Markdown parser are ESM loaded from inside app.asar at run time.
+  assert(askOffered,'DSH ask_user_question is offered to the model');assert(usageRequested,'streamed usage is requested');
+  assert(state.task.context?.used>0&&state.task.context.estimated===true,'token-meter measured the packaged session: '+JSON.stringify(state.task.context));
+  const md=await call('ai-markdown',{texts:['## 标题\n\n**粗体**\n\n| a | b |\n| - | - |\n| 1 | 2 |']}),tree=JSON.stringify(md?.[0]??null);
+  assert(tree.includes('"type":"table"')&&tree.includes('"type":"strong"'),'packaged Markdown parse: '+tree.slice(0,200));
+  pass('Packaged ASAR loads DSH token-meter, ask-user and compaction plugins and the micromark/mdast Markdown parser');
+ }finally{model.closeAllConnections();model.close();}
+}
 async function main(){
  assert(fs.existsSync(executable),'installed executable missing');
  const resources=path.join(path.dirname(executable),'resources');
  for(const file of ['app.asar','mihomo/mihomo.exe','mihomo/LICENSE','mihomo/mihomo-source.tar.gz','process-host/facet-process-host.exe','process-host/manifest.json','facet.ico','AGENTS.md','README.md','docs/README.md','docs/PROJECT.md','docs/CURRENT-SCOPE.md','docs/AI-CONTROL-HANDOFF.md','docs/CONTROL-API.md','docs/EXTENSION-COMPATIBILITY.md','docs/FINGERPRINT-CATALOG.md','docs/DIAGNOSTICS.md'])assert(fs.existsSync(path.join(resources,file)),file+' missing');
  pass('Installed resources include packaged code, core, process host, icon, licenses and source archive');
- server=http.createServer((req,res)=>{if(req.url==='/geo'){geoHits++;res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({ip:'203.0.113.40',country_code:'JP',country:'Japan',timezone:{id:'Asia/Tokyo'}}));}if(req.url.startsWith('/diagnostic-reset'))return req.socket.destroy();if(req.url.startsWith('/diagnostic-status'))res.statusCode=503;res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<!doctype html><title>Installed live fixture</title><h1>REAL_INSTALLED_PAGE</h1><script>window.ticks=0;function tick(){window.ticks++;requestAnimationFrame(tick)}tick();</script>');});
+ server=http.createServer(async(req,res)=>{if(req.url==='/ai-probe'){res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({status:'cooldown',retryAfterMs:25000}));}if(req.url==='/ai-upload'){aiUpload='';for await(const b of req)aiUpload+=b;return res.end('received');}if(req.url==='/geo'){geoHits++;res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({ip:'203.0.113.40',country_code:'JP',country:'Japan',timezone:{id:'Asia/Tokyo'}}));}if(req.url.startsWith('/diagnostic-reset'))return req.socket.destroy();if(req.url.startsWith('/diagnostic-status'))res.statusCode=503;res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<!doctype html><title>Installed live fixture</title><h1>REAL_INSTALLED_PAGE</h1><input type="file" id="aiFile"><script>window.ticks=0;function tick(){window.ticks++;requestAnimationFrame(tick)}tick();</script>');});
  await new Promise(r=>server.listen(0,'127.0.0.1',r));const url='http://127.0.0.1:'+server.address().port+'/';
  proxy=http.createServer((req,res)=>{proxyHits++;const destination=new URL(req.url);const request=http.request(destination,{method:req.method,headers:req.headers},response=>{res.writeHead(response.statusCode,response.headers);response.pipe(res);});request.on('error',()=>res.end());req.pipe(request);});
  proxy.on('connect',(req,downstream,head)=>{proxyHits++;const target=new URL('http://'+req.url);const upstream=net.connect(Number(target.port)||443,target.hostname,()=>{downstream.write('HTTP/1.1 200 Connection established\r\n\r\n');if(head.length)upstream.write(head);upstream.pipe(downstream);downstream.pipe(upstream);});for(const socket of [upstream,downstream]){sockets.add(socket);socket.on('error',()=>{});socket.on('close',()=>sockets.delete(socket));}});
@@ -95,7 +133,7 @@ async function main(){
  fs.writeFileSync(path.join(extensionSource,'popup.html'),'<title>Packaged extension verification</title><p>Real packaged extension API</p>');
  const catalog=new ExtensionCatalog(root),extension=catalog.stage(extensionSource);catalog.accept(extension);catalog.setEnabled(b.id,extension.id,true);
  fs.writeFileSync(path.join(root,'workspace-tools.json'),JSON.stringify({nodes:[],ips:[],quickLinksRevision:1,quickLinks:[{id:'quick-ipip',name:'ipip.la',url:'https://ipip.la/disguise.html'},{id:'quick-arena',name:'Arena',url:'https://arena.ai/agent'},{id:'duplicate',name:'ipip.la',url:'https://ipip.la/'}]}));
- await launch();assert((await call('snapshot')).instances.every(x=>x.status==='stopped'));pass('Installed app loads real production preload/IPC and does not auto-start instances');
+ await launch();if(process.argv.includes('--ai-only')){await call('start',{id:a.id});await wait(async()=>(await call('snapshot')).instances.find(x=>x.id===a.id).title==='Installed live fixture','AI test page');await ui.evaluate(id=>route('browser',id),a.id);await ui.locator('#aiToggle').click();await verifyPackagedDsh(a.id);await close();await launch();assert((await call('ai-state')).task.entries.some(e=>e.text.includes('PACKAGED_DSH_VERIFIED')));pass('Packaged DSH history persists across restart');await close();return;}assert((await call('snapshot')).instances.every(x=>x.status==='stopped'));pass('Installed app loads real production preload/IPC and does not auto-start instances');
  const firstIcon=await verifyTaskbar();pass('Actual packaged window exposes native Facet icons and correct taskbar icon/relaunch paths');
  assert.equal((await call('snapshot')).versions.app,require('../package.json').version);
  const beforeCatalogEnvironment=(await call('snapshot')).instances.find(x=>x.id===a.id).environment;
@@ -225,7 +263,7 @@ async function main(){
  const resetPageAfter=await instancePage(b.id);assert.notEqual(resetPageAfter,resetPage);
  const resetValue=await resetPageAfter.evaluate(()=>({storage:localStorage.getItem('reset-marker'),cookie:document.cookie,touch:navigator.maxTouchPoints}));assert.equal(resetValue.storage,null);assert(!resetValue.cookie.includes('reset-cookie'));assert.equal(resetValue.touch,0);
  const diskCatalog=new ExtensionCatalog(root);assert.deepEqual(diskCatalog.enabled(b.id),[extension.id]);assert.equal(savedReset.resetPending??null,null);const freshPanel=await extensionPage(b.id,extension.id);assert.equal(await freshPanel.evaluate(async()=> (await chrome.storage.local.get('resetPackageProbe')).resetPackageProbe),undefined);pass('Packaged reset queries controlled exit through the real proxy, aligns locale, creates clean storage and preserves proxy and extension bindings while clearing extension data');
- await ui.locator('#aiToggle').click();await ui.waitForFunction(()=>!document.querySelector('#aiPanel').hidden);const originalSession=(await call('ai-state')).sessions.selectedId;await ui.locator('#aiClear').click();await wait(async()=>(await call('ai-state')).sessions.selectedId!==originalSession,'packaged new session');const sessionId=(await call('ai-state')).sessions.selectedId;await call('ai-session-rename',{sessionId,title:'Packaged session persistence'});await call('ai-session-select',{sessionId:originalSession});await call('ai-session-select',{sessionId});pass('Packaged AI panel creates, selects and renames independently persisted sessions');await close();await launch();const restoredAI=await call('ai-state');assert.equal(restoredAI.sessions.selectedId,sessionId);assert(restoredAI.sessions.items.some(x=>x.title==='Packaged session persistence'));pass('Packaged AI sessions restore after complete process restart');
+ await ui.locator('#aiToggle').click();await ui.waitForFunction(()=>!document.querySelector('#aiPanel').hidden);const originalSession=(await call('ai-state')).sessions.selectedId;await ui.locator('#aiClear').click();await wait(async()=>(await call('ai-state')).sessions.selectedId!==originalSession,'packaged new session');const sessionId=(await call('ai-state')).sessions.selectedId;await call('ai-session-rename',{sessionId,title:'Packaged session persistence'});await call('ai-session-select',{sessionId:originalSession});await call('ai-session-select',{sessionId});pass('Packaged AI panel creates, selects and renames independently persisted sessions');await verifyPackagedDsh(b.id);await close();await launch();const restoredAI=await call('ai-state');assert.equal(restoredAI.sessions.selectedId,sessionId);assert(restoredAI.sessions.items.some(x=>x.title==='Packaged session persistence'));assert(restoredAI.task.entries.some(e=>e.kind==='assistant'&&e.text.includes('PACKAGED_DSH_VERIFIED')));pass('Packaged AI sessions and completed DSH tool history restore after complete process restart');
  const control=await call('control-status');await call('control-save',{enabled:false});await assert.rejects(()=>fetch('http://127.0.0.1:'+control.apiPort+'/v1/status'));pass('Disabling external control closes the packaged API listener');await close();
 }
 main().catch(e=>{errors.push(e.stack||String(e));console.error(e.message);}).finally(async()=>{

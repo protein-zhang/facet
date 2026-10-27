@@ -43,14 +43,16 @@ test('catalog import strips unknown/private fields, rejects incompatible rendere
 });
 
 test('full catalog plans remain coherent over 2000 seeds without mutating input or applying source UA/timezone',()=>{
- const {ID,GPUS,SCREENS,CPUS}=require('../src/main/fingerprint-catalog.cjs');
+ const {ID,GPUS,SCREENS,CPUS,CPU_TIERS}=require('../src/main/fingerprint-catalog.cjs');
  const base=environment({language:'ja-JP',timezone:'Asia/Tokyo',geoEnabled:true,latitude:35,longitude:139});
  const original=JSON.stringify(base),seenGPU=new Set(),seenCPU=new Set(),seenScreen=new Set(),seenMemory=new Set();
  for(let i=0;i<2000;i++){
   const plan=environment(preset(ID,base,'catalog-'+i)),f=plan.fingerprint;
   assert.equal(plan.language,base.language);assert.equal(plan.timezone,base.timezone);assert.equal(plan.longitude,139);
   assert.equal(f.hardware,true);assert.equal(f.touch,0);assert.equal(f.colorDepth,24);assert([4,8].includes(f.memory));
-  assert(GPUS.some(g=>g.vendor===f.vendor&&g.renderer===f.renderer));assert(CPUS.includes(plan.cpu));
+  const gpu=GPUS.find(g=>g.vendor===f.vendor&&g.renderer===f.renderer);assert(gpu);assert(CPUS.includes(plan.cpu));
+  // The thread count must be plausible for the chosen GPU's tier (no UHD 617 + 24 threads).
+  assert(CPU_TIERS[gpu.tier].includes(plan.cpu),`incoherent ${plan.cpu}T for ${gpu.model} (${gpu.tier})`);
   assert(SCREENS.some(s=>s.width===f.screenWidth&&s.height===f.screenHeight&&s.dpr===plan.scale));
   assert.equal(plan.width,0);assert.equal(plan.height,0);assert(plan.width<=f.screenWidth&&plan.height<=f.availHeight);assert(f.memory!==4||plan.cpu<=8);
   assert.deepEqual(environment(plan),plan);assert.deepEqual(preset(ID,base,'catalog-'+i),preset(ID,base,'catalog-'+i));
@@ -76,4 +78,23 @@ test('generated UA metadata follows current Windows runtime and explicit custom 
  assert.equal(generatedMetadata({...plan,userAgent:'custom UA'},{metadata}),null);
  assert.equal(generatedMetadata({...plan,platform:'MacIntel'},{metadata}),null);
  assert.equal(generatedMetadata(plan,{metadata:{...metadata,platform:'Linux'}}),null);
+});
+
+test('a custom or runtime-drifted Chrome UA derives version-matched brands instead of empty UA-CH',()=>{
+ const {customMetadata}=require('../src/main/fingerprint.cjs');
+ // Native runtime is Chrome 152.0.7977.167 with a GREASE brand; the instance pinned .130.
+ const native={metadata:{platform:'Windows',platformVersion:'19.0.0',architecture:'x86',bitness:'64',mobile:false,
+  brands:[{brand:'Not?A_Brand',version:'24'},{brand:'Chromium',version:'152'}],
+  fullVersionList:[{brand:'Not?A_Brand',version:'24.0.0.0'},{brand:'Chromium',version:'152.0.7977.167'}]}};
+ const drift='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7977.130 Safari/537.36';
+ const cm=customMetadata({userAgent:drift,platform:'Win32'},native);
+ assert.deepEqual(cm.brands,[{brand:'Not?A_Brand',version:'24'},{brand:'Chromium',version:'152'}]);
+ assert.deepEqual(cm.fullVersionList,[{brand:'Not?A_Brand',version:'24.0.0.0'},{brand:'Chromium',version:'152.0.7977.130'}]);
+ assert.equal(cm.fullVersion,'152.0.7977.130');assert.equal(cm.platform,'Windows');assert.equal(cm.architecture,'x86');
+ // An older major version is reflected in the brand version too.
+ assert.equal(customMetadata({userAgent:drift.replace('152.0.7977.130','140.0.1.2'),platform:'Win32'},native).brands.find(b=>b.brand==='Chromium').version,'140');
+ // Non-Chrome, non-Windows, or missing native metadata keep the previous (empty) policy.
+ assert.equal(customMetadata({userAgent:'Mozilla/5.0 (Windows NT 10.0) Gecko/20100101 Firefox/133.0'},native),null);
+ assert.equal(customMetadata({userAgent:drift,platform:'MacIntel'},native),null);
+ assert.equal(customMetadata({userAgent:drift},{metadata:null}),null);
 });

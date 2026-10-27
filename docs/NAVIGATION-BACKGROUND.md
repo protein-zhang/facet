@@ -28,7 +28,7 @@ tags: [Facet, 导航, 后台, 回归]
 
 已通过 `npm.cmd run check`（331 个脚本）、`npm.cmd run test:control-api`（1 项）、`npm.cmd run test:quick-links`（16 项）、`npm.cmd run test:browser-tabs`（含独立 Electron 重启恢复）、`npm.cmd run test:privacy-sites`（7 项）、`npm.cmd run test:grid-transition-electron`（4 项）及 `git diff --check`。宫格切回普通网页的两种模式均保留输入、页面标识和目标，没有重新请求主页面。图形界面测试顺序运行，避免多个窗口争夺焦点造成输入失败；一次并发运行的收藏测试在点击阶段超时，单独重跑通过。
 
-完整 `tests/grid-electron.cjs` 未通过：“从未显示过的页面”的缩略图为空。使用检查点 `72364a0` 的原始 Controller 和网页标签模块，在同一 Electron 44.9.3 环境复测，得到相同失败；这属于现存问题，本轮没有改写断言或宣称宫格全量通过。两份结果分别保留在 `.local-dev/navigation-regression-artifacts/grid-current-first.json`、`.local-dev/navigation-regression-artifacts/grid-baseline.json`。第一次基线加载器因 `.cjs` 扩展处理器不存在而失败，修正为 Node 实际使用的 `.js` 处理器后完成了上述对照。
+（2026-10-23 已修复，见 [交付状态](UX-DELIVERY-STATUS.md)。）完整 `tests/grid-electron.cjs` 当时未通过：“从未显示过的页面”的缩略图为空。使用检查点 `72364a0` 的原始 Controller 和网页标签模块，在同一 Electron 44.9.3 环境复测，得到相同失败；这属于现存问题，本轮没有改写断言或宣称宫格全量通过。两份结果分别保留在 `.local-dev/navigation-regression-artifacts/grid-current-first.json`、`.local-dev/navigation-regression-artifacts/grid-baseline.json`。第一次基线加载器因 `.cjs` 扩展处理器不存在而失败，修正为 Node 实际使用的 `.js` 处理器后完成了上述对照。
 
 本轮不承诺修复代理节点或网站的真实网络超时；未向真实模型发送题目。修改主进程代码必须正常退出并重新启动应用，不能把独立测试通过写成生产已生效。本次授权重启及现场结果见下节。
 
@@ -78,7 +78,7 @@ tags: [Facet, 导航, 后台, 回归]
 
 ## 回归边界
 
-本轮 check=333脚本、control-api=1项、navigation-background=6项、grid-transition=4项通过，git diff --check通过。完整 browser-tabs 的前7个集成检查通过，但 favorites menu native height 超时，重试同样失败；用检查点原始 Controller/browser-tabs 对照也得到相同失败。没有修改断言掩盖问题，没有宣称这套全量回归通过。对照日志位于 .local-dev/minimized-tabs-baseline/test.log 和 minimized-tabs-retry/test.log。之前记录的完整宫格缩略图失败仍保留。
+本轮 check=333脚本、control-api=1项、navigation-background=6项、grid-transition=4项通过，git diff --check通过。完整 browser-tabs 的前7个集成检查通过，但 favorites menu native height 超时，重试同样失败；用检查点原始 Controller/browser-tabs 对照也得到相同失败。没有修改断言掩盖问题，没有宣称这套全量回归通过。对照日志位于 .local-dev/minimized-tabs-baseline/test.log 和 minimized-tabs-retry/test.log。之前记录的完整宫格缩略图失败仍保留。（2026-10-23 续：两项均已修复。收藏菜单原因是原生浮层显示后停在首帧、视口卡在 216px，见 [交付状态](UX-DELIVERY-STATUS.md)。）
 
 本修复没有改变节点、DNS、缓存、扩展或指纹探测逻辑，不能保证解决代理 AnyTLS 连接失败导致的长时间资源等待；也未验收长期无人值守抽卡、系统睡眠或应用崩溃后的任务恢复。正常后台渲染可能增加资源消耗，显式节能模式仍是例外。
 
@@ -89,5 +89,15 @@ tags: [Facet, 导航, 后台, 回归]
 本轮修复前检查点72ce0a1；源码备份在 .local-dev/minimized-repair-backup。优先撤销本轮最终修复提交并正常重启千面，无需删除浏览存储。
 
 # 回滚
+
+## 2026-10-23 多标签组合场景补修（当前源码未发布）
+
+- 宫格省资源模式原来只恢复活跃页面，切换后的旧页仍被节流。现在按全部已加载标签应用当前节流策略，并同步新建/切换、宫格及扩展弹窗生命周期。
+- 最小化创建的非活动页即使 View bounds 非零，隐藏 RenderWidget 仍可能在清除临时指标后返回0×0。现在先设置有效原生尺寸，隐藏后台页保留临时覆盖，显示及布局完成后再清除；每页最多一个100ms一次性任务，关闭标签和停止实例时释放，不增加轮询。
+- `npm.cmd run test:background-tabs-policy` 的3组真实Electron断言通过：隐藏旧页650ms增长39帧；后台页恢复保持970×558；激活清除临时覆盖后随窗口变为1070×607。timeOrigin和输入保留，未重新加载。
+- 原有最小化7项、导航6项、宫格切换4项以及扩展启停恢复11项回归通过。新报告 `.local-dev/background-tabs-policy-after.json` 为本次证据；旧审查报告被中间复测覆盖，不作为完整修复前快照。
+- 正式应用未重启，未修改正式实例；本轮未打包发布，也未重新验收前述公网加载或完整宫格缩略图旧问题。回滚检查点 `ea9594e`，源码备份 `.local-dev/extension-defaults-background-backup-20261023/`。
+
+## 前轮回滚说明
 
 修改前 Git 检查点为 `72364a0`。优先撤销本修复提交并正常重启应用，避免覆盖后续工作。回滚不需要删除浏览资料、登录数据或修改代理。

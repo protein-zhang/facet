@@ -59,3 +59,162 @@
 .ai-plan-mark{flex:none;width:14px;text-align:center;color:var(--muted)}.ai-plan-title{flex:1;min-width:0;overflow-wrap:anywhere}.ai-plan li small{flex:none;font-size:10px;color:var(--muted);padding-top:1px}
 .ai-plan .in_progress .ai-plan-mark,.ai-plan .in_progress small{color:var(--accent)}.ai-plan .in_progress .ai-plan-title{font-weight:600}.ai-plan .completed .ai-plan-mark{color:var(--accent)}.ai-plan .completed .ai-plan-title{color:var(--muted)}.ai-plan .blocked .ai-plan-mark,.ai-plan .blocked small{color:var(--red)}
 .ai-plan p{margin:8px 0 0;font-size:11px;color:var(--muted);line-height:1.5;overflow-wrap:anywhere}
+
+.ai-engine{flex:none;padding:7px 14px;font-size:10px;color:var(--muted);border-bottom:1px solid var(--line)}
+.ai-activity{flex:none;padding:9px 14px;color:var(--accent);background:var(--accent-weak);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+.ai-activity[hidden],.ai-send-options[hidden],.ai-queue[hidden],.ai-latest[hidden],#aiContinue[hidden],#aiRunning[hidden]{display:none}
+.ai-edit-settings .ai-activity,.ai-edit-settings .ai-queue,.ai-edit-settings .ai-latest,.ai-show-sessions .ai-activity,.ai-show-sessions .ai-queue,.ai-show-sessions .ai-latest{display:none}
+.ai-send-options{margin:4px 0 8px;border-top:1px solid var(--line);padding-top:8px}.ai-send-options select{font-size:11px;padding:5px 6px}
+.ai-queue{flex:none;max-height:150px;overflow:auto;margin:0 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+.ai-queue-title{display:flex;align-items:center;gap:8px;padding:8px 10px;font-size:11px}.ai-queue-title span{flex:1;color:var(--muted)}
+.ai-queue-item{display:flex;align-items:flex-start;gap:6px;padding:6px 10px;border-top:1px solid var(--line);font-size:12px;line-height:1.5}.ai-queue-item span{flex:1;min-width:0;max-height:54px;overflow:auto;overflow-wrap:anywhere}.ai-queue-item b{color:var(--muted)}
+.ai-copy{display:block;margin:7px 0 0 auto;padding:2px 6px;background:transparent;border:0;color:var(--muted);font:10px system-ui;cursor:pointer;border-radius:4px}.ai-copy:hover{color:var(--text);background:var(--accent-weak)}
+.ai-latest{align-self:center;flex:none;margin:0 0 6px;background:var(--panel);box-shadow:0 2px 8px #0002}
+.ai-compose .ai-actions{flex-wrap:wrap}.ai-compose #aiStatus{min-width:40px}.ai-compose #aiMemory{max-width:90px;overflow:hidden;text-overflow:ellipsis}
+
+/* ── DSH-style conversation (2026-10-23) ─────────────────────────────────────────────
+   Engine label folds into the header, history keeps its own scroll box with the
+   "latest" button floating over it, Markdown replies, grouped tool steps. */
+.ai-title{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.ai-title strong{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ai-panel header .ai-engine{padding:0;border:0;font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ai-history-wrap{flex:1;min-height:90px;position:relative;display:flex;flex-direction:column}
+.ai-history-wrap .ai-history{flex:1;min-height:0}
+.ai-edit-settings .ai-history-wrap,.ai-show-sessions .ai-history-wrap{display:none}
+.ai-history-wrap .ai-latest{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);margin:0;z-index:2}
+
+/* Markdown (rules mirror DSH ui-primitives MarkdownText: compact rhythm, scrollable code/tables). */
+.ai-md{white-space:pre-wrap;overflow-wrap:anywhere}
+.ai-md.ai-md-plain{white-space:pre-wrap}
+.ai-md>:first-child{margin-top:0}.ai-md>:last-child{margin-bottom:0}
+.ai-md p{margin:0 0 10px}
+.ai-md h1,.ai-md h2,.ai-md h3,.ai-md h4,.ai-md h5,.ai-md h6{margin:16px 0 8px;line-height:1.45;font-weight:650}
+.ai-md h1{font-size:16px}.ai-md h2{font-size:15px}.ai-md h3{font-size:14px}.ai-md h4,.ai-md h5,.ai-md h6{font-size:13px}
+.ai-md ul,.ai-md ol{margin:0 0 10px;padding-left:20px;white-space:normal}
+.ai-md li{margin:3px 0;white-space:pre-wrap}.ai-md li>ul,.ai-md li>ol{margin:4px 0}
+.ai-md li.ai-md-task{list-style:none;margin-left:-18px}.ai-md-check{display:inline-block;width:18px;color:var(--muted)}.ai-md-check.on{color:var(--accent)}
+.ai-md blockquote{margin:0 0 10px;padding:2px 0 2px 12px;border-left:3px solid var(--line);color:var(--muted)}
+.ai-md hr{border:0;border-top:1px solid var(--line);margin:14px 0}
+.ai-md .ai-md-inline{font:12px/1.5 ui-monospace,Consolas,monospace;padding:1px 5px;border-radius:5px;background:var(--accent-weak);white-space:pre-wrap}
+.ai-md-pre{margin:0 0 12px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg);white-space:normal}
+.ai-md-pre-head{display:flex;align-items:center;gap:8px;padding:5px 8px 5px 12px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted)}
+.ai-md-pre-head span{flex:1}
+.ai-md-copy{padding:2px 8px;border:0;border-radius:5px;background:transparent;color:var(--muted);font:11px system-ui;cursor:pointer}.ai-md-copy:hover{background:var(--accent-weak);color:var(--text)}
+.ai-md-pre pre{margin:0;padding:10px 12px;overflow:auto;max-height:360px;font:12px/1.6 ui-monospace,Consolas,monospace;white-space:pre}
+.ai-md-table{margin:0 0 12px;overflow-x:auto;white-space:normal}
+.ai-md table{border-collapse:collapse;font-size:12px;min-width:100%}
+.ai-md th,.ai-md td{border:1px solid var(--line);padding:5px 9px;text-align:left;vertical-align:top}
+.ai-md th{background:var(--accent-weak);font-weight:600}
+.ai-md-link{color:var(--accent);text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.ai-entry-text{white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* Tool calls: one group per consecutive run, each step with status, target and summaries. */
+.ai-entry.tool.ai-tools{font:12px/1.6 system-ui;color:var(--text);padding:0;margin-bottom:14px;overflow:hidden}
+.ai-tools>summary{display:flex;align-items:center;gap:8px;padding:8px 10px;list-style:none;color:var(--muted);font:500 12px/1.5 system-ui}
+.ai-tools>summary::-webkit-details-marker{display:none}
+.ai-tools>summary::after{content:'›';margin-left:auto;transition:transform .15s}.ai-tools[open]>summary::after{transform:rotate(90deg)}
+.ai-tools-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ai-tools-fail{flex:none;color:var(--red);font-size:11px}.ai-tools-run{flex:none;color:var(--accent);font-size:11px}
+.ai-mark{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;font-size:10px;font-weight:700}
+.ai-mark.ok{color:var(--accent);background:var(--accent-weak)}.ai-mark.fail{color:var(--red);background:var(--amber-weak,var(--accent-weak))}.ai-mark.run{color:var(--accent);animation:ai-spin 1.2s linear infinite}
+@keyframes ai-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.ai-mark.run{animation:none}}
+.ai-steps{list-style:none;margin:0;padding:0 10px 8px;border-top:1px solid var(--line)}
+.ai-step{border-bottom:1px dashed var(--line)}.ai-step:last-child{border-bottom:0}
+.ai-step summary{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;padding:7px 0;cursor:pointer;list-style:none}
+.ai-step summary::-webkit-details-marker{display:none}
+.ai-step-name{font-weight:600}.ai-step-target{color:var(--muted)}
+.ai-step-args{flex-basis:100%;padding-left:24px;color:var(--muted);font:11px/1.5 ui-monospace,Consolas,monospace;overflow-wrap:anywhere}
+.ai-step-result{flex-basis:100%;padding-left:24px;color:var(--text);font-size:11px;overflow-wrap:anywhere}
+.ai-step.fail .ai-step-result{color:var(--red)}
+.ai-step pre{margin:0 0 8px 24px;padding:8px 10px;border-radius:8px;background:var(--bg);max-height:260px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.6 ui-monospace,Consolas,monospace}
+
+/* Empty state: configuration call to action or example tasks. */
+.ai-empty .btn{margin-top:12px}
+.ai-examples{display:flex;flex-direction:column;gap:8px;margin-top:16px}
+.ai-example{text-align:left;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:12px/1.5 system-ui;cursor:pointer;white-space:normal}
+.ai-example:hover{border-color:var(--accent);background:var(--accent-weak)}
+
+/* Composer: send mode sits next to Send while running; full permission is visibly marked. */
+.ai-compose .ai-send-options{flex:none;margin:0;padding:0;border:0}
+.ai-compose .ai-send-options select{width:auto;max-width:96px;padding:4px 6px;font-size:11px;background:transparent;border-color:var(--accent);color:var(--accent)}
+.ai-compose #aiPermission[data-level="full"]{color:var(--amber);font-weight:600}
+/* DSH ask_user_question card: docked above the composer like an approval. */
+.ai-question{flex:none;max-height:45%;overflow:auto;margin:0 10px;padding:10px 12px;border:1px solid var(--accent);border-radius:12px;background:var(--accent-weak)}
+.ai-question[hidden],.ai-meter[hidden]{display:none}
+.ai-question-title{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}.ai-question-title strong{font-size:12px}.ai-question-title span{color:var(--muted);font-size:11px}
+.ai-question-item{margin:8px 0 0;padding:0;border:0;min-width:0}
+.ai-question-item legend{padding:0;margin-bottom:6px;font-weight:600;line-height:1.55;overflow-wrap:anywhere}
+.ai-question-chip{display:inline-block;margin-right:6px;padding:0 6px;border-radius:6px;background:var(--panel);color:var(--accent-text);font-size:10px;font-weight:600}
+.ai-question-option{display:flex;align-items:flex-start;gap:8px;margin:4px 0;padding:7px 9px;border:1px solid var(--line);border-radius:9px;background:var(--panel);cursor:pointer}
+.ai-question-option:hover,.ai-question-option:has(input:checked){border-color:var(--accent)}
+.ai-panel .ai-question-option input{flex:none;width:15px;height:15px;margin:2px 0 0;padding:0;border:0;accent-color:var(--accent)}
+.ai-question-option span{flex:1}
+.ai-question-option span{min-width:0;overflow-wrap:anywhere}.ai-question-option b{display:block;font-weight:600}.ai-question-option small{display:block;color:var(--muted);line-height:1.5}
+.ai-panel .ai-question-custom{margin-top:4px;min-height:32px;resize:vertical;font-size:12px}
+.ai-question .ai-actions{justify-content:flex-end}
+.ai-edit-settings .ai-question,.ai-show-sessions .ai-question{display:none}
+/* DSH token-meter context pressure ring. */
+.ai-meter{flex:none;display:inline-flex;align-items:center;gap:3px;color:var(--muted);font-size:10px;cursor:default}
+.ai-meter svg{width:14px;height:14px;transform:rotate(-90deg)}
+.ai-meter circle{fill:none;stroke-width:3}.ai-meter-track{stroke:var(--line2)}.ai-meter-value{stroke:var(--accent);stroke-linecap:round}
+.ai-meter[data-level="mid"] .ai-meter-value{stroke:var(--amber)}.ai-meter[data-level="high"]{color:var(--red)}.ai-meter[data-level="high"] .ai-meter-value{stroke:var(--red)}
+/* ── Panel polish (2026-10-23 evening) ─────────────────────────────────────────────── */
+/* Header: icon actions keep the title and engine version readable; open views stay marked. */
+.ai-panel header{gap:2px;padding:10px 8px 10px 14px}
+.ai-panel header .ai-title{margin-right:6px}
+.ai-panel .ai-head-btn{width:30px;height:30px;color:var(--muted)}
+.ai-panel .ai-head-btn svg{width:17px;height:17px}
+.ai-panel .ai-head-btn[aria-expanded="true"]{background:var(--accent-weak);color:var(--accent-text)}
+/* Thin scrollbars without arrow buttons; the standard properties would disable the pseudo-elements. */
+.ai-panel *{scrollbar-width:auto;scrollbar-color:auto}
+.ai-panel ::-webkit-scrollbar{width:6px;height:6px}
+.ai-panel ::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px}
+.ai-panel ::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+.ai-panel ::-webkit-scrollbar-track,.ai-panel ::-webkit-scrollbar-corner{background:transparent}
+.ai-panel ::-webkit-scrollbar-button{display:none;width:0;height:0}
+/* History fades at its edges so text scrolling under the plan or the cards does not look cut off. */
+.ai-history-wrap .ai-history{-webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 16px,#000 calc(100% - 16px),transparent 100%);mask-image:linear-gradient(to bottom,transparent 0,#000 16px,#000 calc(100% - 16px),transparent 100%)}
+.ai-history-wrap .ai-latest{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;bottom:14px;border:1px solid var(--line2);border-radius:50%;background:var(--panel);color:var(--text);box-shadow:var(--shadow);cursor:pointer}
+.ai-history-wrap .ai-latest:hover{background:var(--hover)}
+.ai-history-wrap .ai-latest[hidden]{display:none}
+.ai-latest svg{width:15px;height:15px;transform:rotate(180deg)}
+/* Running indicator: a soft pulse in the activity line. */
+.ai-activity{display:flex;align-items:center;gap:8px}
+.ai-activity::before{content:'';flex:none;width:7px;height:7px;border-radius:50%;background:currentColor;animation:ai-pulse 1.2s ease-in-out infinite}
+@keyframes ai-pulse{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.ai-activity::before{animation:none}}
+/* Composer context row: scope and model are quiet pills, usage sits on the right. */
+.ai-context{gap:6px}
+.ai-panel .ai-context #aiScope{flex:0 1 auto;width:auto;max-width:46%;height:26px;padding:0 4px 0 8px;border:1px solid transparent;border-radius:13px;background:var(--hover);font-size:11px;cursor:pointer}
+.ai-panel .ai-context #aiScope:hover:not(:disabled){border-color:var(--line2)}
+.ai-context #aiModelBadge{display:block;position:relative;flex:0 1 auto;min-width:0;max-width:46%;height:26px;padding:0 22px 0 10px;border:1px solid transparent;border-radius:13px;background:transparent;color:var(--muted);font-size:11px;line-height:24px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ai-context #aiModelBadge::after{content:'';position:absolute;right:10px;top:50%;width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-75%) rotate(45deg)}
+.ai-context #aiModelBadge:hover:not(:disabled){background:var(--hover);color:var(--text)}
+.ai-context .ai-meter{margin-left:auto}
+.ai-context .ai-meter[hidden]+.ai-send-options{margin-left:auto}
+/* Approval card matches the question card; amber marks that an action waits for consent. */
+.ai-approval{flex:none;margin:0 10px;padding:10px 12px;border:1px solid var(--amber);border-top:1px solid var(--amber);border-radius:12px;background:var(--amber-weak);max-height:40%}
+.ai-card-head{display:flex;align-items:baseline;gap:8px;margin-bottom:6px;min-width:0}
+.ai-card-head strong{flex:none;font-size:12px}
+.ai-card-head span{min-width:0;color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ai-approval pre{margin:0;padding:8px 10px;border-radius:8px;background:var(--panel);font:11px/1.6 ui-monospace,Consolas,monospace;max-height:160px;overflow:auto}
+.ai-approval .ai-actions,.ai-question-actions{justify-content:flex-end}
+/* Question card: compact chips for short options, actions pinned while the card scrolls. */
+.ai-question{padding:10px 12px 0;max-height:52%}
+.ai-question-options{display:flex;flex-direction:column;gap:5px}
+.ai-question-option{margin:0}
+.ai-question-option:has(input:checked){background:color-mix(in srgb,var(--accent) 9%,var(--panel))}
+.ai-question-item.compact .ai-question-options{flex-direction:row;flex-wrap:wrap;gap:6px}
+.ai-question-item.compact .ai-question-option{align-items:center;padding:5px 12px 5px 9px;border-radius:999px}
+.ai-question-item.compact .ai-question-option input{margin:0}
+.ai-question-multi{margin-left:6px;color:var(--muted);font-size:10px;font-weight:400}
+.ai-panel .ai-question-custom{margin-top:6px}
+.ai-question .ai-question-actions{position:sticky;bottom:0;margin:8px -12px 0;padding:8px 12px 10px;background:var(--accent-weak);border-top:1px solid color-mix(in srgb,var(--accent) 22%,var(--line))}
+/* Settings: the row being edited and the provider in use are labelled. */
+.ai-provider-row.editing{border-color:var(--accent);background:var(--accent-weak)}
+.ai-provider-active{margin-left:6px;padding:1px 6px;border-radius:6px;background:var(--accent-weak);color:var(--accent-text);font-size:10px;font-style:normal;font-weight:600;vertical-align:1px}
+.ai-provider-row.editing .ai-provider-active{background:var(--panel)}
+.ai-editor-title{margin:0;font-size:13px;font-weight:600;overflow-wrap:anywhere}
+/* Empty state sits slightly above the middle of the conversation area, as in DSH. */
+.ai-history:has(>.ai-empty:only-child){display:flex;flex-direction:column;justify-content:center;padding-bottom:12%}

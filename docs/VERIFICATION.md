@@ -1,5 +1,102 @@
 # 验证入口与历史记录
 
+## 2026-10-25：v0.2.21 发布准备与打包验收（未推送、未发布）
+
+- 内容：纳入 `5daf8c3`、`c02c49a`、`21c2ff4` 的显卡档位/CPU 组合、网页 `window.chrome` 接口、自定义 Chrome UA 的 UA-CH 修复及必应新标签页；应用与锁文件版本升至 0.2.21。未继续修改已记录的老核显组合及会话 UA 回退问题，也未改写已有实例。
+- 本轮基础门禁：`npm.cmd run check`（355 个脚本）、`npm.cmd run test:control-api`（1/1）、指纹/标签状态/更新/打包专项单元测试（37/37）、`git diff --check` 通过。`test:browser-tabs` 的 4 项单元及两个独立真实 Electron 阶段通过，覆盖新标签入口、最后一页补开、存储隔离和重启恢复；默认网址在测试中指向本机夹具，不以此证明公网必应可达。
+- 构建：复用校验通过的固定 Electron、Mihomo、进程保护和环境管道组件，执行 `node scripts/build-installer.cjs`。安装包 `Facet-Setup-0.2.21-x64.exe`，131,088,438 字节；SHA256 `2177f4016a62a1e1896947757d629bc78066ee172cc991ea44906c8333eaa618`。安装包、blockmap、latest.yml 和 .sha256 四件套齐全且校验一致。
+- 包内核验：165 个应用源码文件逐一比对一致；38 个顶层生产依赖均存在；外置 22 份文档与明确白名单和当前内容一致；其他资源与许可证比对一致。包内未发现本地交接、开发验收记录或未接线的订阅代理草稿。新增文本的高置信凭据模式扫描无命中，不代表对所有形式的敏感信息做出完备保证。
+- 真实打包程序验收：完整解包目录复制到没有低完整性标签的临时目录，Facet.exe 与 app.asar 的 SHA256 均和构建输出相同；`npm.cmd run test:installed -- <隔离副本的 Facet.exe>` **27/27 通过，退出码 0**。包含主进程/IPC、代理、视口、真实网页、存储隔离、扩展、宫格、API、诊断持久化、重置、DSH 与独立进程重启恢复。未改动正式用户数据，结束后没有该测试副本的残留进程。
+- 验证边界：未执行安装器安装/卸载向导，Authenticode 状态为 `NotSigned`；未重跑已记录受本机 HTTPS 夹具连接影响的指纹集成测试第二阶段，不能将该项记为通过。尚未推送源码或公开发布，新版说明先供用户审核。
+
+## 2026-10-24：新建网页标签改为打开必应（源码未发布）
+
+- 改动：`browser-tabs-state.cjs` 新增 `NEW_TAB_URL='https://www.bing.com/'`；标签栏“+”、Ctrl+T、未给 `url` 的 `tab-new`（界面/API/AI）和关闭最后一页后的补开页都打开它，经实例自己的代理加载。显式传 `about:blank` 仍可得到空白页。扩展 `chrome.tabs.create` 未给 url 时仍为 `about:blank`，未改。
+- 通过：`check`（355 脚本）、全部单元测试 426 项（425 通过、1 项 POSIX 跳过、0 失败，含新增默认页用例）、`test:control-api`、`test:browser-tabs`（两阶段真实 Electron 全部 PASS）、`git diff --check`。
+- Electron 用例把默认页替换为本机夹具 `/new-tab`，分别断言“+”、Ctrl+T 和最后一页关闭后都加载了该页，测试不访问外网。真实必应页面在实例中的加载未在测试中验证。
+- 正在运行的应用需重启主进程后生效。
+
+## 2026-10-24：指纹检测对抗（CPU/显卡配套、window.chrome、自定义 UA 的 UA-CH；源码未发布）
+
+- 起因：用控制 API + CDP（只读）在一个检测页上实测伪装实例，读出破绽：`hardwareConcurrency 24` 配 `Intel UHD 617`（不可能的机器）、`window.chrome` 为空对象；重启应用载入首轮两处修复（`5daf8c3`）后复测，又读出第三处——该实例保存的自定义 UA（`Chrome/152.0.7977.130`，比运行内核 `.167` 旧）触发旧策略清空 UA-CH，`navigator.userAgentData.brands` 为空数组（空 brands 本身即强「被伪造」信号）。
+- 首轮改动（已提交 `5daf8c3`）：`fingerprint-catalog.cjs` 按显卡档位选线程数；`fingerprint-inject.js` 在窗口补 `chrome.app/csi/loadTimes`（原生样式 toString）。
+- 第二轮改动（本次，待提交）：`fingerprint.cjs` 新增 `customMetadata`，对 Chrome-on-Windows 的自定义/漂移 UA 从 UA 自身 `Chrome/<版本>` 推导非空 brands/fullVersionList，复用原生 GREASE 项与 OS 字段；`environment.cjs` 把它接到 `generatedMetadata` 之后、清空兜底之前。非 Chrome / 非 Windows / 缺原生 metadata 仍清空。
+- 通过：`check`（355 脚本）、全部单元测试 425 项（424 通过、1 项 POSIX 跳过、0 失败，含 `fingerprint.test.cjs` 的 2000 种子配套断言与新增 `customMetadata` 用例）、`test:control-api`、`git diff --check`。
+- 运行时确认（首轮）：独立 Electron 探针显示 `window.chrome.{app,csi,loadTimes}` 存在、`toString` 原生、低端显卡（GT 625）配 6 线程、显卡/CPU 配套。
+- 未通过但与本改动无关：`test:fingerprint-contexts` / `test:fingerprint-electron` 首阶段通过，第二阶段（fresh-process-restart / UI-save）在本机因自定义 HTTPS 主机 `main.alpha.test` 连接被拒而超时；stash 掉本次改动后同样复现，确属既有环境问题（疑与正在运行的生产实例争用端口/CDP 有关）。
+- 未改（见指纹文档已知限制）：`navigator.userAgentData` 仍缺 `Google Chrome` 品牌（空 brands 子问题已由 `customMetadata` 修复，但补 Google Chrome 改页面会与 Service Worker 不一致，属内核阶段）、宿主语音按真实系统语言暴露、`navigator.languages` 单地区码。
+- 运行中的生产进程载入的是 `5daf8c3`（无 `customMetadata`）；第二轮改动需再次重启主进程后生效。对已保存旧 UA 的实例，可另行清掉自定义 UA/平台改回原生元数据使 brands 立即非空（见下条线上修复记录）。未构建安装包。
+
+## 2026-10-23 22:20：v0.2.20 发布候选构建（未发布）
+
+- 源码：`0b28c96`（发布说明与打包检查）。之后只提交了本记录，`docs/VERIFICATION.md` 不在安装包内，安装包内容不受影响。
+- 构建前门禁：`check`、`test:control-api`、`test:updates`、`test:packaging`、`git diff --check`、`npm audit --omit=dev`（0 漏洞）通过。
+- 构建：`build:environment-pipe` 未能重新链接 `environment-pipe.node`（LNK1104），原因是正式进程正在加载该文件。该文件与 manifest 的哈希一致，git 中也没有改动，因此直接运行 `node scripts/build-installer.cjs`，由它的 `verifyArtifacts()` 校验 Mihomo、进程保护和环境管道组件后构建。
+- 产物：`release/Facet-Setup-0.2.20-x64.exe`，131,082,668 字节，SHA256 `f0b2c8f15b005dcf8271ed7d3eb658f7ea31e57e00b3b09c00fa1655d28914b1`。`latest.yml` 版本 0.2.20，SHA512 与大小和安装包一致，blockmap 和 .sha256 齐全。
+- 打包验收：`win-unpacked` 复制到没有低完整性标签的 `%LOCALAPPDATA%\Temp`（`app.asar`、`Facet.exe` 哈希与构建输出一致），连续运行 `test:installed` 3 次。第 1 次 27 项全部通过，但最后一次正常退出超过 15 秒等待，记为失败：控制关闭后 16 秒才出现「正在退出」，像是测试用 `CloseMainWindow` 发出的 WM_CLOSE 没有送到主窗口。第 2、3 次 27/27 通过、退出码 0。新增的第 25 项确认 ASAR 内模型能收到 `ask_user_question`、请求附带 `include_usage`、token-meter 记录上下文用量，主进程能用 micromark/mdast 解析 Markdown 表格和粗体。
+- 未做：安装器本身的安装/卸载流程（只验收了解包程序）；未签名；未推送、未发布。
+
+## 2026-10-23：AI 面板接入 DSH 后端插件（第二轮）
+
+- `tests/ai-stream.test.cjs` 新增 2 项：OpenAI `cached_tokens` 与 DeepSeek `prompt_cache_hit_tokens` 映射为 DSH 互斥用量（输入不含缓存命中），用量是不可枚举字段、不进入历史；畸形用量被忽略。
+- `tests/ai-request.test.cjs` 新增 2 项：服务拒绝 `stream_options` 时立即去掉重发一次并通知调用方；上下文超限的 400 归类为 `CONTEXT_WINDOW_EXCEEDED`，错误文字不含服务返回体；普通 400 不被误判。
+- `tests/ai-dsh-plugins.test.cjs` 2 项：提问卡片的数量与长度上限、空选项过滤；压缩摘要输入去掉系统消息、保留工具调用并遵守字数预算。`tests/ai-tool-display.test.cjs` 新增 ask_user_question 摘要。
+- `tests/ai-dsh-plugins-electron.cjs` 5 组（真实 Electron、IPC、Controller、官方 DSH 插件，模型为本机协议夹具）：请求带 `include_usage`，模型返回用量成为 token-meter 基线（`estimated:false`），圆环显示 16% 与缓存命中，测量随会话加密保存；提问卡片显示标题、选项说明和两个问题，空提交被拒且不发请求，选项加自定义文字原样作为工具结果回到模型，「暂不回答」与「停止」各自生效，过期回答被拒；24K 窗口下 DSH 压缩把较早 4 次 observe 整理为摘要（只有 1 次无工具的摘要请求），下一次请求携带检查点、工具消息变少，任务在阈值下完成，每次 observe 只显示一次；夜间截图无横向溢出。
+- 回归：`test:ai-panel`、`test:ai-agent`、`test:ai-dsh`、`test:ai-browser`、`test:ai-capabilities`、`test:ai-recovery`、`test:ai-sessions`、`test:ai-stop`、`test:ai-memory` 通过；全部 `tests/*.test.cjs` 423 项 422 通过、1 项 POSIX 跳过；`check`、`test:control-api`、`test:packaging`、`git diff --check` 通过；`npm audit` 0 漏洞。
+- 发现并修复：新增 DSH 包的必需 peer 只被 npm 自动安装、不在 `dependencies` 中，electron-builder 会漏收；已列为精确版本生产依赖。
+- 未覆盖：真实模型服务的用量字段和超限报错原文（各家措辞不同，按常见英文/中文措辞匹配）、打包后 ASAR 中加载新增插件（未重新构建安装包）。
+
+## 2026-10-23：AI 面板 DSH 式对话（第一轮）
+
+- `tests/ai-markdown.test.cjs` 5 项：GFM 结构、顶层偏移、位置信息剥离；CJK 粗体扩展生效（对照：不加扩展时同一文本不产生 strong）；HTML 节点保持惰性；超长、过深、非法输入回落为 null；批量上限与缓存。
+- `tests/ai-tool-display.test.cjs` 3 项：键入文字、对话框文字、网址查询不进入摘要；结果摘要按真实返回结构；畸形参数降级为空摘要。
+- `tests/ai-panel-electron.cjs` 6 组（真实 Electron、IPC、Controller、官方 DSH 引擎，模型为本机协议夹具）：未配置时「配置模型」打开设置；示例任务填入输入框；Markdown 标题/粗体/右对齐表格/代码块；`<img onerror>`、`<script>` 与 `javascript:` 链接均无效果（页面无 img/script 元素、`window.pwned` 为空）；图片未被请求；三步工具合成一组（含 1 步失败），键入的密码既不显示也不存入条目；追加段落时前面的块元素被复用；点击链接在实例中新开标签并跟随。
+- 回归：`test:ai-agent`、`test:ai-dsh`、`test:ai-browser`、`test:ai-capabilities`、`test:ai-recovery`、`test:ai-sessions`、`test:ai-stop`、`test:ai-memory` 通过；全部 `tests/*.test.cjs` 416 项 415 通过、1 项 POSIX 跳过；`check` 353 个脚本、`test:control-api`、`test:packaging`、`git diff --check` 通过；`npm audit --omit=dev` 0 漏洞。
+- 未覆盖：真实模型的流式长回复、打包后的 ASAR 中加载新增 ESM 依赖（未重新构建安装包）、屏幕阅读器体验。
+
+## 2026-10-23：扩展加载警告去重与单元测试全绿
+
+- 依据只读统计正式 `runtime-output.json`：5000 行中 1157 行（23.1%）为重复的 `ExtensionLoadWarning`；统计时去掉了网址和凭据，未改动正式数据。
+- `tests/process-warnings.test.cjs` 5 项；`.local-dev/extension-warning-probe/probe-dedup.cjs` 在真实 Electron 中把两个扩展各加载到 3 个会话，运行输出只有 2 条警告头、丢弃 4 条重复。正式入口 `test:cdp-workers` 通过；`test:browser-tabs` 12 项、`test:extension-defaults` 通过。
+- 全部 `tests/*.test.cjs`：403 项，402 通过、0 失败、1 项 POSIX 专用跳过（此前 `experience.test.cjs` 4 项因夹具缺少 `applyDefaults` / `library.get` 失败）。
+
+## 2026-10-23：0x80000003 根因（低完整性目录标签，不是 D 盘）
+
+- 现象：本机从项目目录直接运行 `node_modules\electron\dist\electron.exe --version` 或 `release\build-*\win-unpacked\Facet.exe`，立即以 0x80000003 退出，无输出。此前的记录写作“D 盘路径”，这是误判。
+- 对照：同一运行时复制到 `D:\FacetDiag-*`、`D:\AProgram\FacetDiag-*`、`D:\FacetDiag中文-*` 均正常（v44.9.3）；复制到 `D:\AProgram\arena\` 下任一位置都崩溃。C 盘副本正常，给它加上 `(OI)(CI)low` 完整性标签后崩溃，改回 medium 后恢复。中文路径、盘符、NVMe 磁盘、NTFS 与 8.3 短名称都不是原因。
+- 根因：`D:\AProgram\arena`、`QQ分析`、`内核拆解`、`正常研究` 带有可继承的 `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)`，以及自定义 SID `S-1-4-885347220-671684212` 的写入许可和 Everyone 拒绝删除子项；未查到是哪个工具设置的，非 Windows 默认。exe 继承低标签，ELECTRON_RUN_AS_NODE 下实测进程完整性为 `S-1-16-4096`（Low），对照目录为 `S-1-16-8192`（Medium）。同期 `D:\AProgram\内核拆解` 下的 ungoogled-chromium 也有 0x80000003 记录，同一原因。
+- 用户影响：默认安装目录不受影响。把 10-23 14:17 构建的 `win-unpacked` 复制到 `D:\FacetDiag-20261023\` 后，`test:installed` **26 项全部通过**（原构建目录启动即 0x80000003）。未运行 NSIS 安装向导，以免覆盖本机已安装版本的卸载登记。
+- 改动：`scripts/electron-runtime.cjs` 在 0x80000003 时读取原运行时的实际完整性级别，提示具体原因，回退逻辑不变；`launcher.test.cjs` 13 项通过。打包验收原先依赖 PowerShell 7（本机未安装），改为缺少 `pwsh.exe` 时回退到 Windows PowerShell 5.1；窗口属性脚本去掉 .NET 5 才有的 `Convert.ToHexString`。
+- 诊断脚本在 `.local-dev/d-drive-breakpoint/`；排查用的运行时副本已删除。
+
+## 2026-10-23：宫格省资源模式缩略图
+
+- 修复前复现：`grid-electron` 在“从未显示过的格子获得缩略图”超时（与 `.local-dev/navigation-regression-artifacts/grid-baseline.json` 记录一致）。诊断脚本 `.local-dev/grid-thumb-probe/` 确认：未显示过的网页 `capturePage` 立即返回 0×0，关闭节流或移到窗口外显示都无效；在本格原位显示约11ms后得到 692×389（553×311 格 × DPR 1.25）首帧，再隐藏并节流仍可截图，像素为页面绿色主体与右下蓝块。
+- 修复后：`grid-electron` 16项、`grid-live-stress-electron` 8项、`grid-transition-electron` 4项、`background-tabs-policy`（3组，`completed:true`）、`minimized-rendering` 7项通过；`check` 345个脚本、`test:control-api` 1项、`git diff --check` 通过。均使用隔离临时数据和本机 HTTP 页面，未接触正式实例、代理或 DNS。
+- 弹窗遮挡保护有反向验证：去掉 `overlay` 判断后新增用例以“no thumbnail while covered”失败。
+- 边界：只修复省资源模式缩略图；原生网页短暂原位显示期间页面会收到一次 `visibilitychange`。未验证公网重页面首帧超过1.5秒的情形（会在10秒后重试）。`browser-tabs` 收藏菜单原生高度超时已在下一节修复。
+
+## 2026-10-23：原生菜单浮层停在首帧
+
+- 复现：诊断脚本 `.local-dev/overlay-height-probe/probe.cjs` 在硬件加速/软件渲染 × 正常/非激活显示下，浮层 View 高 573（第二次打开 407），网页 `innerHeight` 始终 216，rAF 计数停在1；`probe2.cjs` 对照 `invalidate`、重设尺寸、隐藏再显示均无效，只有重新 `setBackgroundThrottling(false)` 恢复（400ms 内 26 帧、视口 407）。
+- 修复后：`test:browser-tabs` 11项、`test:quick-links` 16项、`test:privacy-sites` 7项、`test:extensions-electron` 15项、`test:navigation-background` 6组通过；修复前 `browser-tabs` 在“favorites menu native height”超时。`quick-links` 在 HEAD 上停在“direct quick navigation”，原因是点击坐标在菜单长高前计算，已改为等浮层稳定后再点。
+- 均使用隔离临时数据与本机 HTTP 页面，未接触正式实例、代理或 DNS；正式应用未重启。
+
+## 2026-10-23：DSH 执行引擎候选构建 v0.2.20
+
+- 修改前检查点：806f21c，保留扩展默认启用及后台标签修复。现有用户进程未重启，正式数据、代理和DNS未被测试改写。
+- 官方引擎：DeepSeek Harness 0.2.1-rc.2，使用真实 AgentLoop、工具注册、Session 和 Cordis 插件；provider、权限、网页/实例工具与系统加密会话继续由千面提供。
+- 已通过：check、test:control-api、diff --check、test:packaging（4项）、test:ai-agent、test:ai-browser、test:ai-dsh、test:ai-memory、test:ai-sessions、test:ai-recovery、test:ai-stop 和 test:creation-lifecycle。会话、停止、恢复、记忆及DSH待办包含全新进程验证；网页测试使用真实Electron、DOM、CDP和本机HTTP/SSE协议服务。
+- 实际已配置模型验收：deepseek-flash通过4轮官方DSH调用，观察隔离本机页面、执行一次isTrusted=true的真实点击、再次观察并报告随机校验码；网页计数与HTTP服务端计数均为1，结果加密保存后可读取。未发送真实账号页面或正式实例数据。
+- 最终打包验收：v0.2.20真实Facet.exe的26项检查全部通过，包含内置说明书读取、网页观察、最终回复及独立进程恢复DSH工具历史；同时覆盖原有代理、存储隔离、扩展、宫格、API、重置和正常退出。最终基础门禁为check（344个脚本）、test:control-api（1项）及diff --check。发现并修复electron-builder漏收DSH peer依赖；最终ASAR包含全部23个官方包，161个实际应用源码逐一校验一致，不以开发模式通过代替ASAR验证。
+- 回归中发现并修复：任务结束与发送点击之间的竞态、立即补充图片传递、未知工具/参数失败未纳入无进展保护、截图历史衔接；后台视口为空改用整页读取，不据此判断断网。
+- 构建使用既有校验一致的原生组件，未强行覆盖运行中加载的.node文件。本机D盘路径仍会触发既有的STATUS_BREAKPOINT（10-23 更正：原因是项目目录的低完整性标签，不是盘符，见文首）；打包程序通过逐文件哈希一致的C盘临时副本验收，未关闭Chromium沙盒。安装器本身未覆盖安装到当前生产环境。
+- 安装包、SHA256、上游MIT版权和固定依赖均已生成/保留；个人记录、运行配置和测试凭据不进入应用包。生产依赖审计为0漏洞；未覆盖所有模型服务、所有网站和跨设备长期运行，不把模型协议夹具当作通用智能或网站兼容性证明。
+- 本轮仅准备本地候选安装包，未推送或发布GitHub Release。回滚应保留现有数据，再恢复检查点代码并执行npm.cmd ci；不要使用git reset --hard清理用户工作。旧版不会显示新增待办，回退前先保存重要任务。
+
+## 历史记录
+
+
 更新：2026-10-22。当前源码版本 v0.2.18 发布候选。下方原始记录是各阶段历史证据；命令编号、数量和阻塞状态不能当作今天的全量结果。
 
 ## 2026-10-22：扩展启停后自动恢复
@@ -28,7 +125,7 @@
 - 更新过期测试夹具：补齐当前生命周期依赖；重置按新实例 ID 验证，加入出口语言/时区检查；扩展更新按“更新并重启”验证；收藏夹按当前表单操作并等待短时通知遮挡结束。没有为旧测试恢复已废弃 UI 或绕过生产网络安全策略。
 - 旧 `test:electron` 综合脚本未通过：初始等待依赖停止实例仍有顶部页签；继续诊断后，其本机订阅下载又被当前 SSRF 策略正确阻止，后续还引用旧订阅表单。保留原脚本及失败记录，没有将其记作通过；本轮改用下面的成品包专项验证当前生产 UI/IPC 与业务。该历史脚本仍需单独维护。
 - 新生成的 v0.2.18 成品包 `test:installed` **23 项通过**：真实生产入口、原生图标/任务栏、直连及 Mihomo 网页、默认 DNS 不落配置、六个检测入口、F12、存储隔离、实时宫格、API 认证/跳转/持久化、扩展框架/标签/数据隔离、失败请求采集、退出回收、全新进程重读、重置语言/时区及网站/扩展数据清除、AI 会话管理和重启、关闭 API。
-- 本机限制：D 盘原构建目录直接启动触发 Windows `0x80000003`；旧版 v0.2.17 原构建目录使用独立临时数据启动，也出现相同退出码，本轮尚未确定底层原因。将新版同一构建完整复制到本机 C 盘后完成上述 23 项检查。107 个包文件逐一核对哈希一致，不把 D 盘原路径失败写成成功；未完成 NSIS 安装向导实装或其他机器验收。
+- 本机限制：D 盘原构建目录直接启动触发 Windows `0x80000003`；旧版 v0.2.17 原构建目录使用独立临时数据启动，也出现相同退出码，本轮尚未确定底层原因（10-23 已查明：构建目录继承了项目文件夹的低完整性标签，见文首）。将新版同一构建完整复制到本机 C 盘后完成上述 23 项检查。107 个包文件逐一核对哈希一致，不把 D 盘原路径失败写成成功；未完成 NSIS 安装向导实装或其他机器验收。
 - 打包核验：148 个生产源码文件与受测源码逐一一致；运行时 package.json 仅由构建器移除开发脚本和 devDependencies，其他字段一致；17 份白名单手册与当前文件一致；私有开发目录、历史验收文档、测试及未接线订阅代理草稿未入包。安装包 SHA256、更新元数据的版本/文件名/SHA512 一致。7-Zip 完整性检查通过（附带嵌入归档尾部数据告警），再从安装 EXE 实际解出 107 个文件，与受测成品逐一核对哈希一致。安装包及回归原始证据放在 Git 忽略的 `release/`、`.local-dev/release-prep-20261021/`，不提交个人配置。
 - 未对用户正在运行的千面主进程或真实实例做重启/重置；本轮未验证所有第三方网站、验证码、账号、扩展、所有代理线路或长期多实例压力。发布候选与测试通过不代表已推送 GitHub 或公开 Release。
 

@@ -8,6 +8,27 @@ test('page paths cannot escape extension origin or directory',()=>{for(const bad
 test('symlinks, oversize files, invalid permissions and ancestor imports rejected',()=>fixture((c,s,root)=>{assert.throws(()=>c.stage(root),/父文件夹/);let m=JSON.parse(fs.readFileSync(path.join(s,'manifest.json')));m.permissions='storage';fs.writeFileSync(path.join(s,'manifest.json'),JSON.stringify(m));assert.throws(()=>c.stage(s),/清单/);m.permissions=[];fs.writeFileSync(path.join(s,'manifest.json'),JSON.stringify(m));const big=path.join(s,'big');fs.writeFileSync(big,'');fs.truncateSync(big,512*1024*1024);assert.throws(()=>c.stage(s),/扩展文件夹共 512 MB .*超过上限 500MB.*占用最多：根目录文件（512 MB）$/);fs.truncateSync(big,500*1024*1024+1);assert.throws(()=>c.stage(s),/超过上限 500MB/);assert.equal(fs.readdirSync(c.base).filter(n=>n.startsWith('ext-')).length,0,'oversize folder is rejected before copying');fs.unlinkSync(big);if(process.platform==='win32'){const target=path.join(root,'junction-target');fs.mkdirSync(target);fs.symlinkSync(target,path.join(s,'linked'),'junction');}else fs.symlinkSync(path.join(s,'content.js'),path.join(s,'linked'));assert.throws(()=>c.stage(s),/链接/);assert.equal(c.data.items.length,0);}));
 test('forgetting one instance preserves all other bindings',()=>fixture((c,s)=>{const row=c.stage(s);c.accept(row);c.setEnabled('A',row.id,true);c.setEnabled('B',row.id,true);c.forget('A');assert.deepEqual(c.enabled('A'),[]);assert.deepEqual(c.enabled('B'),[row.id]);assert.throws(()=>c.setEnabled('B',row.id,'yes'));}));
 
+test('new-instance defaults persist, leave existing bindings alone and affect only later instances',()=>fixture((c,s,root)=>{
+ const row=c.stage(s);c.accept(row);c.setEnabled('existing',row.id,false);
+ assert.equal(c.setDefaultEnabled(row.id,true).changed,true);assert.deepEqual(c.enabled('existing'),[]);
+ c.applyDefaults('new');assert.deepEqual(c.enabled('new'),[row.id]);
+ const reopened=new ExtensionCatalog(path.join(root,'data'));assert.equal(reopened.get(row.id).defaultEnabled,true);reopened.applyDefaults('after-restart');assert.deepEqual(reopened.enabled('after-restart'),[row.id]);
+ assert.equal(reopened.setDefaultEnabled(row.id,true).changed,false);reopened.setDefaultEnabled(row.id,false);reopened.applyDefaults('later');assert.deepEqual(reopened.enabled('later'),[]);assert.deepEqual(reopened.enabled('new'),[row.id]);
+ assert.throws(()=>reopened.setDefaultEnabled(row.id,'true'),/状态无效/);assert.throws(()=>reopened.setDefaultEnabled('missing',true),/不存在/);
+}));
+
+test('refresh retains new-instance default and removal clears it without stale defaults',()=>fixture((c,s)=>{
+ const row=c.stage(s);c.accept(row);c.setDefaultEnabled(row.id,true);
+ const manifest=JSON.parse(fs.readFileSync(path.join(s,'manifest.json'),'utf8'));manifest.version='2.0';fs.writeFileSync(path.join(s,'manifest.json'),JSON.stringify(manifest));c.replace(row.id,c.stage(s,row.id));
+ assert.equal(c.get(row.id).defaultEnabled,true);c.applyDefaults('new');assert.deepEqual(c.enabled('new'),[row.id]);c.remove(row.id,{disableAll:true});c.applyDefaults('later');assert.deepEqual(c.enabled('later'),[]);
+}));
+
+test('failed default writes leave stored flags and instance bindings unchanged',()=>fixture((c,s)=>{
+ const row=c.stage(s);c.accept(row);const before=fs.readFileSync(c.file,'utf8'),commit=c.commit.bind(c);c.commit=()=>{throw Error('disk failure');};
+ assert.throws(()=>c.setDefaultEnabled(row.id,true),/disk failure/);assert.equal(c.get(row.id).defaultEnabled,undefined);assert.equal(fs.readFileSync(c.file,'utf8'),before);
+ c.commit=commit;c.setDefaultEnabled(row.id,true);c.commit=()=>{throw Error('disk failure');};assert.throws(()=>c.applyDefaults('new'),/disk failure/);assert.deepEqual(c.enabled('new'),[]);
+}));
+
 test('confirmed bulk removal rolls back the package on metadata failure and preserves unrelated bindings',()=>fixture((c,s,root)=>{
  const row=c.stage(s);c.accept(row);c.setEnabled('A',row.id,true);c.setEnabled('B',row.id,true);
  const m=JSON.parse(fs.readFileSync(path.join(s,'manifest.json'),'utf8'));m.name='Other';fs.writeFileSync(path.join(s,'manifest.json'),JSON.stringify(m));const other=c.stage(s);c.accept(other);c.setEnabled('A',other.id,true);
@@ -37,3 +58,17 @@ test('refresh replaces files in the same package folder, keeps id and enable lis
  assert.equal(fs.readFileSync(path.join(folder,'content.js'),'utf8'),'console.log("v2")');assert.deepEqual(c.enabled('inst-a'),[row.id]);assert.equal(c.data.items.length,1);
  assert.deepEqual(fs.readdirSync(c.base).sort(),[row.id],'staging and old copies are cleaned up');
  c.setSource(row.id,'D:\\\\moved');assert.equal(c.get(row.id).source,'D:\\\\moved');}));
+
+test('a partial extension folder (missing scripts or icons) is refused at import and cannot be enabled by default',()=>fixture((c,s)=>{
+ const {missingFiles}=require('../src/main/extension-catalog.cjs');
+ const write=m=>fs.writeFileSync(path.join(s,'manifest.json'),JSON.stringify({manifest_version:3,name:'Partial',version:'3.2.4',...m}));
+ write({icons:{16:'icons/16.png'},background:{service_worker:'background.js'},content_scripts:[{matches:['https://example.test/*'],js:['content.js','no-leave.js','pin-page.js'],css:['./style.css']}],action:{default_icon:'/icons/action.png'},declarative_net_request:{rule_resources:[{id:'r',enabled:true,path:'rules.json'}]},side_panel:{default_path:'not-checked.html'}});
+ assert.deepEqual(missingFiles(s).sort(),['./style.css','/icons/action.png','background.js','icons/16.png','no-leave.js','pin-page.js','rules.json'].sort());
+ assert.throws(()=>c.stage(s),e=>/扩展文件不完整，Chromium 无法加载：清单引用的 7 个文件不存在（icons\/16\.png、/.test(e.message)&&/ 等）/.test(e.message)&&/导入完整的扩展文件夹/.test(e.message));
+ assert.equal(fs.readdirSync(c.base).length,0,'the staged copy is removed');assert.equal(c.data.items.length,0);
+ for(const f of ['icons/16.png','icons/action.png','background.js','no-leave.js','pin-page.js','style.css','rules.json']){fs.mkdirSync(path.dirname(path.join(s,f)),{recursive:true});fs.writeFileSync(path.join(s,f),'x');}
+ assert.deepEqual(missingFiles(s),[]);const row=c.stage(s);c.accept(row);
+ fs.rmSync(path.join(c.folder(row.id),'pin-page.js'));assert.throws(()=>c.setDefaultEnabled(row.id,true),/缺少|不完整.*不能设为默认启用/);assert.equal(c.get(row.id).defaultEnabled,undefined);
+ assert.equal(c.setDefaultEnabled(row.id,false).changed,false,'turning the default off still works');
+ write({content_scripts:[{matches:['https://example.test/*'],js:['../outside.js']}]});assert.deepEqual(missingFiles(s),['../outside.js'],'paths outside the package count as missing');
+}));
