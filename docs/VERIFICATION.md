@@ -1,4 +1,89 @@
 # 验证入口与历史记录
+## 2026-10-27：v0.2.22 发布准备与打包验收
+- 内容：v0.2.21 之后的 `9f95925` 至 `a6b23c8`（1:1 呈现与 #10、宫格小格子 iframe 输入、AI 会话交给 DSH、音频/窗口尺寸/WebGPU/渲染器/内存/任务栏/触摸点/DPR 等环境读数）；应用与锁文件版本升至 0.2.22，说明见 [v0.2.22](releases/v0.2.22.md)。
+- 门禁：`check`、`test:control-api`、`git diff --check` 通过；全部单元测试 443 项中 441 通过、1 项 POSIX 跳过，`node-network.test.cjs` 读取本机网卡超时 1 次，单独重跑 9/9 通过。
+- 构建：与 v0.2.21 相同，复用已提交并校验过的 Electron、Mihomo、进程保护和环境管道组件，执行 `node scripts/build-installer.cjs`（第一次误用 `npm.cmd run build:installer`，环境管道被重新编译、二进制哈希变化；已还原已提交版本并重新构建，以下数据均为重建后的安装包）。安装包 `Facet-Setup-0.2.22-x64.exe`，131,115,952 字节，SHA256 `6c0f6617d1da7269e37a1649a12b3fb925a31935bae7244e8155484f6649b706`；安装包、blockmap、latest.yml、.sha256 齐全，校验一致；Authenticode `NotSigned`。
+- 包内核验：169 个源码文件中除不随包的 `subscription-proxy.cjs` 外 168 个与 asar 内一致；38 个生产依赖都在；内置 23 份文档与白名单一致；其他资源与许可证一致；asar 内没有 `.local-dev`、`.git` 或验收记录；本版新增内容的高置信凭据模式扫描无命中。
+- 真实打包程序：解包目录复制到没有低完整性标签的临时目录（Facet.exe、app.asar 哈希与构建输出相同），`test:installed` **27/27 通过，退出码 0**，未改动正式用户数据，结束后没有残留进程。
+- `verify-installed.cjs` 有两处断言按已提交的行为更新：新方案触摸点为本机值（本机 10，原断言 0，`8e959b7` 起）；自适应小屏实例按 1:1 呈现、视图不超过模拟屏幕（原断言放大铺满 scale>1，`9f95925` 起）。两项在 v0.2.21 之后没有跑过安装版验收，所以此前未发现。
+- 未验证：没有运行安装器的安装/卸载向导；没有在其他缩放比例的真实显示器上运行。
+## 2026-10-27：新方案的 DPR 跟随本机显示器，跨站 iframe 与主页面一致（源码未发布）
+- 探针（`.local-dev/oopif-dpr-20261027/probe.cjs`，本机显示器 1.25，`localhost` 跨站 iframe 为独立进程）：
+  - CDP 模拟 1 / 1.5 / 2 时，iframe 的 `devicePixelRatio`、`matchMedia` 和样式表 `@media` 都是 1.25。
+  - 页面缩放（倍数 = 目标 ÷ 本机）时两边都报精确值，但网页按倍数变大或变小，且缩放按主机名保存，换主机名后回到 1。
+  - 加 `disable-site-isolation-trials` 后 iframe 不再是独立进程，跟随模拟值。
+  - 用户选择让新方案直接使用本机 DPR（细节见 [指纹候选库](FINGERPRINT-CATALOG.md) 2026-10-27（二））。用户现有 16 个实例中有 14 个与本机不同，按选择不改。
+- 通过：
+  - `check`（363 脚本）、`test:control-api`、`git diff --check`。
+  - 全部单元测试 443 项（442 通过、1 项 POSIX 跳过）。新增用例覆盖：本机 125% 时整套随机只出 2048×1152、2752×1152、3072×1728 且 DPR 1.25；预设按同一物理屏幕换算；150% 时不能整除的面板被剔除，2560×1440 预设为 1707×960；110% 保留 1.100000023841858；300% 下无法保存的预设回退到显示器；读不到或超范围的 DPR 用旧表；不随机屏幕的一键随机保持旧值。
+- 真实 Electron（`.local-dev/oopif-dpr-20261027/verify-host-dpr.cjs`，与 `main.cjs` 相同的显示器提供者）：
+  - 两个整套随机方案（2048×1152、2752×1152）和 RTX 3070 · 2K 预设（2048×1152）在主页面与跨站 iframe 的 DPR（精确 1.25）、`matchMedia`、`@media`、`screen` 一致。
+  - 对照的 DPR 1 旧式方案仍然主页面 1、iframe 1.25。
+  - 环境页只对旧式方案显示像素比提示。
+- 真实 Electron 回归无失败：`test:fingerprint-electron`、`test:fingerprint-contexts`、`test:instance-reset-electron`、`instance-batch-electron.cjs`、`test:viewport-screen`。
+- 未验证：用户正在运行的千面尚未重启，新生成器还没在其中生效；没有在 150%、110% 等其他缩放的真实显示器上运行。
+## 2026-10-27：显卡读数与真实 Chrome 对齐（WebGPU、渲染器格式、内存、任务栏；源码未发布）
+- 用户选择方案 A：渲染器格式、内存档位和可用高度只用于新生成的方案，已保存实例不变；WebGPU 一致性对所有开启 WebGL 覆盖的实例生效。细节见 [指纹候选库](FINGERPRINT-CATALOG.md) 2026-10-27 条。
+- 探针：Dedicated Worker 在注入时（调试器暂停在开始处）`typeof GPUAdapterInfo` 为 `undefined`、`navigator.gpu` 已存在，第一版只改全局原型的补丁在 Worker 里不生效（页面通过、Worker 仍报 `lovelace`），改为经 `navigator.gpu` 和首个适配器取原型后通过。
+- 通过：`check`、全部单元测试（441 项：440 通过、1 项 POSIX 跳过；新增 `gpu-identity.test.cjs`：Chromium 152 渲染器格式、Dawn 设备 ID → 架构、无 Direct3D 12 的设备 ID、206 款带 ID 型号的名称规则一致性、用户现有实例的 7 个旧格式渲染器）、`test:control-api`、`git diff --check`；新增 `test:fingerprint-gpu`（真实 Electron 实例）：新方案 WebGL 为 `ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Laptop GPU (0x00002520) Direct3D11 vs_5_0 ps_5_0, D3D11)`，页面、Worker、跨站 iframe 的 WebGPU 都是 `nvidia`/`ampere`（本机真实为 `lovelace`），内存 32、可用高度为高度减 48；模拟 GT 430 时三处 `requestAdapter()` 都为 `null`；旧格式渲染器（Iris Xe MAX 100、8 GB、减 40）保持原值，WebGPU 报 `intel`/`gen-12lp`；改过的 getter 和 `requestAdapter` 的 `toString`/`name`/`length` 为原生样式。真实 Electron（退出码 0）：`test:fingerprint-electron`、`test:fingerprint-contexts`、`test:fingerprint-offscreen`、`fingerprint-tostring-electron.cjs`、`test:cdp-workers`、`test:devtools-electron`、`test:instance-reset-electron`、`test:creation-lifecycle`、`test:viewport-screen`、`test:grid`。
+- `test:electron`（electron-smoke）在等待 `[role=tab]` 时超时；在未改动的 `3ccc961` 工作树上同样失败，与本次改动无关（没有运行中的实例时界面不渲染实例标签），未修。
+- 触屏（后续提交）：探针确认 `Emulation.setEmulatedMedia` 对 `pointer`/`any-pointer`/`hover`/`any-hover` 不生效（命令成功、页面和跨站 iframe 的 `matchMedia` 与样式表都不变）。新方案的触摸点改为本机的值；单元测试覆盖有触摸屏（10）、无触摸屏和取值异常（0）。
+- 用户真实千面（重启加载新代码后，读取页面 API）：实例 2（已保存的 Iris Xe MAX 100）WebGPU `intel`/`gen-12lp`；实例 13（Iris Xe，未开硬件覆盖）`intel`/`gen-12lp`；实例 1（UHD 617）`intel`/`gen-9`；三者的 WebGL、内存、屏幕仍是保存值。界面生成的新方案草稿（未保存）：`ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Ti (0x00002803) Direct3D11 vs_5_0 ps_5_0, D3D11)`、32 GB、2560×1440 可用 1392、触摸点 10。CreepJS（实例 2 临时标签，已关闭）：WebGL 与 Worker 中的 GPU 一致，没有列出 lies；仍可见的已知问题是 `touch device: true` 与 `touch: 0`（该实例为旧值）、语音只有系统中文语音、字体含 Microsoft YaHei UI。browserleaks.com 经实例 2 的节点连接被断开（curl 同样失败），未能打开。
+- 未验证：HTTP `Device-Memory` 客户端提示在本机回环夹具中未发送，外部 HTTPS 站点未验证。
+## 2026-10-27：宫格小格子里跨站 iframe 收不到点击和滚轮（源码未发布）
+- 现象（用户反馈 + 实测）：arena.ai 的 HTML 预览在 `ws-*.arena.site` 跨站 iframe 中。用户的实例 2 在宫格小格子（缩放约 0.31）里，系统真实鼠标点击 1 次、滚轮 3 格，预览收到 0 次，全部落到外层网页；同一页面在放大查看（1:1）和正常浏览中预览都能收到。预览页本身 `overflow:hidden`、没有按钮，所以正常浏览里「点了没反应」是页面内容如此，不是输入问题。
+- 探针：`before-mouse-event` 对每个渲染部件（包括跨进程 iframe）都会触发，坐标是该部件自己的坐标，连千面经 CDP 发给 iframe 的输入也会再触发一次，无法据此判断事件属于哪一层，因此没有采用。外层网页收到的、目标为 `<iframe>` 元素且落在其内容区的鼠标事件，正是 Chromium 没送进 iframe 的输入（送对时外层文档根本收不到）。
+- 改动：`tile-input-preload.cjs` 在顶层框架的 isolated world 里、页面脚本之前注册捕获监听；只在小格子里拦下这类事件（页面自己的监听收不到，与送对时一致），报给主进程。`tile-input.cjs` 按 `DOM.getFrameOwner` / `DOM.getBoxModel` 找到对应的跨进程 iframe（外层报告的 `<iframe>` 矩形必须对得上），多层嵌套时逐层用 `DOM.getNodeForLocation` 确认未被遮挡，再用该 iframe 自己的 CDP 会话 `Input.dispatchMouseEvent` 送达（移动、按下、松开、滚轮；按下后拖出 iframe 仍送到原 iframe，离开时结束悬停）。`environment-contexts.cjs` 记录每个子会话的父会话。放大查看、正常浏览不受影响；被遮挡或 `pointer-events:none` 的 iframe 保持外层网页的行为。验证框在小格子里仍会拒绝点击（屏幕坐标是缩放后的），仍需放大后操作。
+- 通过：`check`、全部单元测试（436 项：434 通过、1 项 POSIX 跳过；`node-network.test.cjs` 读取本机网卡超时 1 次，单独重跑 9/9 通过）、`test:control-api`、`git diff --check`；新增 `test:tile-input`（单元 6 项 + 真实 Electron：对照组确认合成输入在小格子里落到外层网页且目标是 `<iframe>`；修复后跨站、嵌套跨站、`transform: scale(0.8)` 容器内的 iframe 收到点击（落点误差 ≤3 CSS 像素，来自整数视图坐标）和 3/3 格滚轮，外层网页收不到也不滚动；悬停离开、拖出后松开；遮挡和 `pointer-events:none` 的 iframe 不转交；外层网页自身点击和滚轮不变；放大查看与正常浏览不转交任何事件）。真实 Electron（退出码 0）：`test:volume`、`test:grid`、`test:grid-transition-electron`、`test:viewport-bookmarks`、`test:browser-tabs`、`test:background-tabs-policy`、`test:minimized-rendering`、`test:fingerprint-contexts`、`test:cdp-workers`、`test:ai-browser`、`test:viewport-screen`（首轮桌面截图被其他窗口遮挡失败，单独重跑通过）。
+- 隔离数据的真实千面（当前源码、2×2 宫格、小格子缩放 0.47）用系统真实鼠标对 7 种 iframe（跨站、sandbox srcdoc、blob、嵌套跨站、scale(0.8) 容器内、Service Worker 提供、右下角固定）各点 1 次、滚 3 格：全部收到 1 次点击和 3 格滚轮，没有重复送达，外层按钮也正常；这一环境里 Chromium 自己把点击和滚轮送对了，只有 6 次移动落到外层由千面转交。放大查看与正常浏览没有转交任何事件（`.local-dev/iframe-input-20261026/probe-tile-real-mouse.cjs`）。
+- 用户真实千面复测（按新代码重启，实例 2 的 arena.ai HTML 预览，系统真实鼠标点击 1 次、滚轮 3 格）：小格子（383×235 显示 1226 宽页面，约 0.31）预览收到 pointerdown 1、click 1、wheel 3，外层网页 0（修复前预览 0、外层 1/1/3）；放大查看预览 1/1/3、外层 0。小格子落点与目标差约 10 CSS 像素（按两次光标位置换算，格子里 1 屏幕像素约等于 3.2 CSS 像素）。重启后节点一度连不上 arena.ai（经本机节点端口 curl 退出码 35），网络恢复后才完成复测。
+
+## 2026-10-26：AI 约 5% 就压缩的来源核对；音频指纹、窗口尺寸、高端显卡配小屏（源码未发布）
+
+- AI 压缩：v0.2.21 在每个任务开始前由千面自己压缩记忆，条件是要附上的历史超过 48000 字符且至少 3 轮，和上下文窗口无关；`deepseek-flash` 自动按 1M 窗口计算，48000 字符约占 2%～5%。同一探针（隔离数据、本机协议夹具、模型名 `deepseek-flash`、每个任务读取一次长网页，共 8 个任务）对比：v0.2.21 工作树在第 5、7 个任务各发一次压缩请求，当时圆环 1.7%～2.2%；当前源码（`a28aff2` 起由 DSH 管理会话历史）8 个任务没有压缩，圆环随对话增长到 3.8%，DSH 在约 80% 时才压缩。本机用户数据最后一次使用 AI 是 10-23，未运行过新代码；修复需要随下个版本发布。
+- 音频指纹：旧噪声只改每个声道前 97 个采样中的一个，常见指纹（第 4500–5000 个采样绝对值之和）不受影响，所有实例都是 `124.04347…`。改为按种子对所有非零采样乘固定增益（相对 1e-6～1e-5）。探针：两个种子 `124.04280434999964`、`124.04240644474339`，各自重复渲染一致。
+- 窗口尺寸：开启硬件覆盖时 `outerWidth/outerHeight` 不超过模拟屏幕的可用区域，网页高度限制为可用高度减 80。探针（主窗口 1454×969）：模拟 1366×768 时 outer 1366×728、inner 1226×648，跨站 iframe 相同；模拟 2560×1440 时 outer 保持真实 1456×972。getter `toString` 为原生样式。
+- 生成器：high 档显卡屏幕物理分辨率至少 1920×1080。
+- 未解决：字体列表来自宿主机，网页层无法隐藏（需内核）；屏幕大于主窗口的实例 outer/inner 仍与主窗口一致。
+- 通过：`check`、全部单元测试（430 项，429 通过、1 项 POSIX 跳过）、`test:control-api`、`git diff --check`；真实 Electron（退出码 0）：`test:viewport-screen`、`test:instance-reset-electron`、`test:grid`、`test:viewport-bookmarks`、`test:fingerprint-electron`、`test:fingerprint-contexts`、`test:fingerprint-offscreen`、`test:browser-tabs`、`fingerprint-tostring-electron.cjs`、`random-viewport-electron.cjs`。`viewport.test.cjs`、`viewport-screen-electron.cjs`、`instance-reset-electron.cjs` 的高度断言按新的工具栏余量更新。
+
+## 2026-10-26：DPR 精度、原生 UA 应用名、老显卡配套与两项测试修复（源码未发布）
+
+- DPR：模拟 DPR 时主页面 `devicePixelRatio` 为 `1.0000000149011612` 等 float32 残差，`resolution` 媒体查询却是精确值。注入脚本把相差不到 1e-6 的残差改回配置值（`fingerprint-inject.js`）。探针（本机显示器 1.25，`localhost` 跨站 iframe 为独立进程）：配置 1 / 1.25 / 1.5 / 2 时主页面读数精确、与媒体查询一致，getter `toString` 为原生样式。跨站 iframe 仍报原生 1.25（DPR 与媒体查询都是），对 iframe 目标发送 `setDeviceMetricsOverride` 被 Chromium 拒绝，属内核限制，未改。
+- 原生 UA：`app.setName('千面 Facet')` 后 Electron 默认 UA 含 `千面Facet/<版本>`，旧的清理只去掉 `Electron/<版本>`；会话设过自定义 UA 后清空也回不到原生。现在原生 UA 取自 `app.userAgentFallback` 并去掉两段标记（`environment.cjs` `nativeUserAgent`）。探针（带真实应用名）：原生、设为 `.130`、清空三次启动，页面 UA 与请求头依次为纯 `.167`、`.130`、纯 `.167`。用户现有 16 个实例都保存了显式 UA，不受应用名问题影响。
+- 老显卡：low 档线程加入 4，low 档屏幕限制物理分辨率不超过 2560×1600（`fingerprint-catalog.cjs`）；显示器下限优先于档位。
+- 测试修复：`test:viewport-bookmarks` 仍按 #10 之前的缩放适配断言固定视口宽 1760，改为 1:1 呈现后的实际尺寸和角落点击（这项自 `9f95925` 起失败，当时未跑）。`test:fingerprint-electron`、`test:fingerprint-contexts` 第二阶段的 ERR_CONNECTION_REFUSED 不是环境问题：实例启动时恢复保存的网页标签，仍打开上一阶段已关闭的端口；测试改为同时更新保存的标签。`fingerprint-contexts` 第三阶段的外部 CDP 端口在 40000–60000 随机选取，本机部分端口无人监听却 listen 报 EADDRINUSE，改为向系统申请空闲端口。
+- 通过：`check`、全部单元测试、`test:control-api`、`git diff --check`；真实 Electron（退出码 0）：`test:fingerprint-electron`（两阶段）、`test:fingerprint-contexts`（三阶段）、`test:viewport-bookmarks`、`test:viewport-screen`、`test:grid`、`test:fingerprint-offscreen`、`test:devtools-electron`、`test:instance-reset-electron`、`test:browser-tabs`、`fingerprint-tostring-electron.cjs`、`test:cdp-workers`。
+- 未验证：没有在真实检测站复测 DPR 与 UA 改动；跨站 iframe 的 DPR 一致性需要内核改动或只用与真实显示器相同的 DPR。
+
+## 2026-10-26：AI 会话改为 DSH 持久 Session（源码未发布）
+
+- 起因：上一条用自写的「较早任务精简 + 任务开始前记忆摘要」缓解压缩过频，仍是千面自己拼历史、DSH 只能压缩当前任务。改为参照 DSH 官方宿主（server / session-controller）：每个会话对应一个长期 Session，任务通过 `ctx.agents.resume` 恢复后追加一轮，历史、中断收尾（`interruptedTurnClosers`）、`tool-result-pruner` 和 `compaction-basic` 全部由 DSH 处理，压缩覆盖之前所有任务。
+- 存储：新增 `ai-dsh-store.cjs`，实现官方 `dsh-session-persistence` 接口（create / open / stat / list / flush，句柄 read / append / flush / close，`session/event`、`session/flush`、`session/disposed` 实时写入路由，200 ms 批量窗口）。每个 Session 一个只追加文件，每行一段 safeStorage 密文并同步落盘；残缺尾行下次写入前截掉，完整行损坏则拒绝打开且不改原文件。
+- 移除：`prefix()` 历史拼接、`memory.compress`、较早任务精简、`compactTurn`、`ai-finish.cjs`、`interruptedHistory`。轮数上限停止后的说明改为 DSH 中一轮不带工具的回复（20 秒超时，失败用千面的停止说明），停止 / 失败 / 关闭中断改为下一任务开始时注入一条系统说明。
+- 迁移：旧版 `sessionsVersion:1` 会话读取时另存 `ai-conversation.json.pre-dsh.bak`，旧记忆在该会话下一次任务时整理成一条「之前的对话（迁移自旧版本，不可信资料）」注入一次；旧图片不迁移。新版写入 `sessionsVersion:2`，旧版本程序无法读取新文件，回退需用备份。
+- 取舍：同一会话的历史不再按实例范围拆分，授权仍按每次任务的范围由工具检查（`test:ai-memory` 中 NARROWED_CONTEXT / RESTORE_SCOPE 改为验证这一点）。
+- 通过：`check`、全部单元测试（新增 `ai-dsh-store.test.cjs`：真实 DSH 跨上下文恢复、注入顺序、取消后续接、残缺尾行修复、损坏拒绝、密文；删除 `ai-memory.test.cjs` 与 `compactTurn` 用例）、`test:control-api`、`git diff --check`；真实 Electron（退出码 0）：`test:ai-dsh`（两进程，重启后在同一 Session 继续并带停止说明）、`test:ai-memory`（六个独立进程：16K 窗口下 4 个任务触发 2 次 DSH 压缩、重启后摘要与图片仍在、强制退出后 DSH 关闭未完成的工具调用、清空删除 Session 文件）、`test:ai-sessions`（旧格式迁移一次、三个独立 Session、删除会话删除文件）、`test:ai-stop`、`test:ai-recovery`、`test:ai-agent`、`test:ai-browser`、`test:ai-plugins`、`test:ai-panel`、`test:ai-capabilities`。
+- 未验证：没有用真实模型和用户的真实长会话复测压缩频率；没有在用户数据目录上实测迁移（测试用隔离目录构造旧格式文件）。
+
+## 2026-10-26：AI 压缩过于频繁、一键随机可选随机屏幕、AI 滚动后点 iframe（源码未发布）
+
+- AI 上下文压缩过于频繁：前几个任务的完整记录（含网页快照、全文等长工具结果）会附在新任务每次请求前面，DSH 只能压缩当前任务，导致长对话里新任务一开始就接近压缩线、几乎每步都压缩。改为发送前精简较早任务的长工具结果（较早任务超过 1200 字保留首尾约 1100 字，最近一个任务超过 4000 字保留约 3500 字；用户与助手文字不删，本地记录不变），记忆压缩按实际要发送的量判断，小窗口模型更早压缩（`ai-memory.cjs`）。没有用真实模型和真实长会话复测压缩次数，只验证了发送内容与触发条件。
+- 一键随机可选随机屏幕：环境方案栏「一键随机」旁新增「同时随机屏幕」（本机记住），勾选后一并抽取屏幕和像素比并开启硬件覆盖；不勾选保持原行为。API `fingerprint-preset` 可传 `randomScreen:true`。
+- AI 在页面远距离滚动后点击跨站 iframe 会落到外层页面：把 iframe 滚回视野后立即发送鼠标事件，浏览器仍按旧画面路由。改为先等新帧呈现再量坐标（`ai-browser.cjs` `locate`）。这个问题此前被「缩放时改用脚本点击」掩盖，#10 改为 1:1 后暴露。
+- 通过：`check`（356 脚本）、全部单元测试 430 项（429 通过、1 项 POSIX 跳过、0 失败，新增 `ai-memory.test.cjs` 与随机屏幕用例）、`test:control-api`、`git diff --check`；真实 Electron（退出码 0）：`test:ai-browser`（新增远距离滚动后点 iframe 的回归）、`test:ai-memory`、`test:ai-agent`、`test:ai-plugins`、`test:ai-dsh`、`test:instance-reset-electron`；环境页「同时随机屏幕」界面探针（默认保持屏幕、勾选后屏幕随机变化、选择被记住）。
+- 未通过但与本改动无关：`test:fingerprint-electron` 第一阶段通过，第二阶段本机自建 HTTPS 夹具 `ERR_CONNECTION_REFUSED` 超时；暂存本轮改动后在原代码上同样复现。
+
+## 2026-10-26：网页 1:1 显示，修复缩放后点不了人机验证（issue #10；源码未发布）
+
+- 现象：issue #10（最大化后页面放大约 10%，验证框和网页预览点不了），以及用户反馈的「宫格放大后点不了验证框」「固定比例要全屏或最大化才能点」「重置环境后像是 1280×720」。
+- 根因（实测）：窗口比模拟屏幕大时页面被 `Emulation.setDeviceMetricsOverride` 的 `scale` 放大，固定视口比浏览区域大或宫格放大时被缩小。缩放不为 1 时，主页面点击的 `screenX` 变化是 `clientX` 的 1.14 倍（真实浏览器恒为 1），跨站 iframe 报出的屏幕位置与页面位置差 15–45 像素；缩放为 1 时完全一致。可见性检测（IntersectionObserver v2）和点击落点在各缩放下都正常，已排除。
+- 修复前，`ip.net.coffee/cloudflare` 的 Cloudflare 托管验证，系统真实鼠标点击：缩放 1 通过；最大化（1.145）不通过；还原（1）通过；固定视口 1266×626（0.829）不通过；最后再测缩放 1 仍通过，排除 IP 被逐步拉黑。
+- 修复后同一流程：小窗、最大化（网页区域限制为 1600 宽、居中）、还原、固定视口、再测，5 次全部点击后通过；宫格放大查看通过；宫格小格子（0.95 缩放预览）仍不通过，属已知限制，需放大后操作。
+- 改动：`viewport.cjs` 正常浏览与宫格放大始终 `scale:1`，网页视图限制在模拟屏幕或固定视口内并居中，布局尺寸按视图显式下发；`controller.cjs` 按呈现边界摆放视图，宫格放大格子 1:1；`grid.js` 标记放大格子；`fingerprint-catalog.cjs` 整套随机只选不小于本机显示器的模拟屏幕（`main.cjs` 提供显示器尺寸）；界面说明文字同步。
+- 通过：`check`（355 脚本）、全部单元测试 427 项（426 通过、1 项 POSIX 跳过、0 失败）、`test:control-api`、`git diff --check`；真实 Electron（退出码 0）：`test:viewport-screen`、`test:instance-reset-electron`、`test:ai-browser`、`test:grid`、`test:grid-transition-electron`、`test:browser-tabs`、`test:background-tabs-policy`、`test:minimized-rendering`、`tests/random-viewport-electron.cjs`。用例按新行为改写：视图限制在屏幕内并居中、布局视口等于视图、缩放恒为 1、固定视口跟随较小的视图、宫格放大 1:1、跨站 iframe 收到真实点击。
+- 已知限制：模拟 DPR 与显示器不同时，主页面 `devicePixelRatio` 带浮点误差（如 `1.0000000149011612`），跨站 iframe 里是显示器真实 DPR，与缩放无关，未改。旧实例的模拟屏幕若比显示器小，最大化后会看到边距，可重新随机。复测使用本机代理出口，结果受出口 IP 影响，不代表所有网站和网络都能通过。
+- 正在运行的应用需重启主进程后生效。原始日志和截图在 Git 忽略的 `.local-dev/issue10-20261026/`。
 
 ## 2026-10-25：v0.2.21 发布准备与打包验收（未推送、未发布）
 

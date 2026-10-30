@@ -106,7 +106,12 @@ app.whenReady().then(async()=>{try{
  obs=await tool('observe',{});assert.notEqual(ref('Frame button'),oldFrameRef);
  await assert.rejects(tool('act',{ref:oldFrameRef,action:'click'}),/失效/);
  r=await tool('act',{ref:ref('Far away'),action:'click'});await logged('far:true');
- reports.push('act sends trusted clicks/typing to main frame, shadow DOM, custom checkbox, native select, OOPIF and offscreen element; occluded element refused');
+ // Regression: the cross-site iframe is now scrolled far out of view. The click must still
+ // reach the iframe (not the parent page) after it is scrolled back into view.
+ {const f1=logs.filter(x=>x==='frame:true').length,m1=logs.filter(x=>x.startsWith('md:')).length;
+  r=await tool('act',{ref:ref('Frame button'),action:'click'});await wait(()=>logs.filter(x=>x==='frame:true').length===f1+1,6000);
+  assert(!r.done.note,'frame click after a far scroll uses the real mouse');assert.equal(logs.filter(x=>x.startsWith('md:')).length,m1,'no stray click in the parent page');}
+ reports.push('act sends trusted clicks/typing to main frame, shadow DOM, custom checkbox, native select, OOPIF (also right after a far scroll) and offscreen element; occluded element refused');
  r=await tool('act',{action:'scroll',direction:'up',amount:20000});assert(/^0\//.test(r.scroll));
  r=await tool('act',{action:'scroll',direction:'down',amount:700});assert(Number(r.scroll.split('/')[0])>0,'wheel scrolled page');
  const pw=await tool('act',{ref:ref('Password'),action:'type',text:'local-fixture-password'});assert.equal(await wc().executeJavaScript("document.querySelector('#pw').value"),'local-fixture-password');assert(!JSON.stringify(pw).includes('local-fixture-password'));
@@ -146,28 +151,32 @@ app.whenReady().then(async()=>{try{
  obs=await tool('observe',{screenshot:true});assert(obs.__image.startsWith('data:image/jpeg;base64,'));
  reports.push('screenshots only when provider vision flag is enabled');
 
- // Fitted viewport: fixed emulated width larger than the view → scale < 1. Clicks must still land.
- const b=c.store.create('Scaled');const env={...c.store.get(b.id).environment,width:2400,height:1600};c.store.update(b.id,{url:originA+'/page',environment:env});await c.start(b.id);
- await ui(`route('browser',${JSON.stringify(b.id)})`);const bwc=c.runtimes.get(b.id).view.webContents;await wait(()=>bwc.getTitle()==='Fixture'&&!bwc.isLoading());
- await wait(()=>logs.includes('vw:2400'));agent.run.scope=[a.id,b.id];reports.push('scaled instance viewportKey scale='+JSON.parse(String(c.runtimes.get(b.id).viewportKey).replace(/^tile:/,'')).scale);
- const bobs=await agent.tool('observe',{instanceId:b.id});const n0=logs.filter(x=>x==='far:true').length;
+ // Fixed viewport larger than the view: presented 1:1 at the view size, never scaled (issue #10).
+ // AI input is therefore unscaled and a cross-site iframe receives a real, trusted click.
+ const b=c.store.create('Fixed larger than view');const env={...c.store.get(b.id).environment,width:2400,height:1600};c.store.update(b.id,{url:originA+'/page',environment:env});await c.start(b.id);
+ await ui(`route('browser',${JSON.stringify(b.id)})`);const br=c.runtimes.get(b.id),bwc=br.view.webContents;await wait(()=>bwc.getTitle()==='Fixture'&&!bwc.isLoading()&&br.viewportKey);await br.viewportWork;
+ const bvb=br.view.getBounds();assert(bvb.width<2400);assert.equal(JSON.parse(br.viewportKey).scale,1);
+ await wait(async()=>Math.abs(await bwc.executeJavaScript('innerWidth')-bvb.width)<=1);
+ agent.run.scope=[a.id,b.id];reports.push('fixed 2400x1600 instance in a '+bvb.width+'x'+bvb.height+' view: viewportKey scale='+JSON.parse(br.viewportKey).scale);
+ const bobs=await agent.tool('observe',{instanceId:b.id});const n0=logs.filter(x=>x==='far:true').length,f0=logs.filter(x=>x==='frame:true').length;
  await agent.tool('act',{instanceId:b.id,ref:refOf(bobs.elements,'Far away'),action:'click'});await wait(()=>logs.filter(x=>x==='far:true').length===n0+1);
- const fr=await agent.tool('act',{instanceId:b.id,ref:refOf(bobs.elements,'Frame button'),action:'click'});await logged('frame:false');assert(/缩放视口/.test(fr.done.note));
+ const fr=await agent.tool('act',{instanceId:b.id,ref:refOf(bobs.elements,'Frame button'),action:'click'});await wait(()=>logs.filter(x=>x==='frame:true').length===f0+1);assert(!fr.done.note,'1:1 frame click uses the real mouse');
  await agent.tool('act',{instanceId:b.id,ref:refOf(bobs.elements,'Frame input'),action:'type',text:'scaled'});await agent.tool('act',{instanceId:b.id,ref:refOf(bobs.elements,'Send frame'),action:'click'});await logged('finput:scaled');
- reports.push('fitted viewport (innerWidth 2400 in a smaller view): trusted clicks land in main frame; cross-site iframe falls back to labelled script click and typing still works');
- // Adaptive viewport larger than its configured screen is presented at scale > 1.
- const up=c.store.create('Adaptive enlarged'),upEnv=structuredClone(c.store.get(up.id).environment);
+ reports.push('fixed viewport larger than the view is shown 1:1: trusted clicks land in main frame and cross-site iframe; typing works');
+ // Adaptive viewport with a configured screen smaller than the host: the view is limited to the screen, still 1:1.
+ const up=c.store.create('Adaptive capped'),upEnv=structuredClone(c.store.get(up.id).environment);
  Object.assign(upEnv,{width:0,height:0,scale:1.25});Object.assign(upEnv.fingerprint,{enabled:true,hardware:true,screenWidth:800,screenHeight:600,availHeight:560});
  c.store.update(up.id,{url:originA+'/page',environment:upEnv});await c.start(up.id);await ui(`route('browser',${JSON.stringify(up.id)})`);
  const ur=c.runtimes.get(up.id),uwc=ur.view.webContents;
- await wait(()=>uwc.getTitle()==='Fixture'&&!uwc.isLoading()&&ur.viewportKey&&JSON.parse(ur.viewportKey).scale>1);await ur.viewportWork;
+ await wait(()=>uwc.getTitle()==='Fixture'&&!uwc.isLoading()&&ur.viewportKey&&JSON.parse(ur.viewportKey).scale===1&&ur.view.getBounds().width<=800);await ur.viewportWork;
+ if(c.bounds.width>800)assert.equal(ur.view.getBounds().width,800,'wider host must not stretch the page beyond its screen');
  agent.run.scope.push(up.id);const uobs=await agent.tool('observe',{instanceId:up.id}),u0=logs.filter(x=>x==='trusted:true').length;
  await agent.tool('act',{instanceId:up.id,ref:refOf(uobs.elements,'Trusted'),action:'click'});await wait(()=>logs.filter(x=>x==='trusted:true').length===u0+1);
  await agent.tool('act',{instanceId:up.id,ref:refOf(uobs.elements,'Search here'),action:'type',text:'enlarged 世界',submit:true});await logged('submitted:enlarged 世界');
  await agent.tool('act',{instanceId:up.id,ref:refOf(uobs.elements,'Frame input'),action:'type',text:'enlarged-frame'});
  await agent.tool('act',{instanceId:up.id,ref:refOf(uobs.elements,'Send frame'),action:'click'});await logged('finput:enlarged-frame');
  assert(await uwc.executeJavaScript('innerWidth<=screen.width&&innerHeight<=screen.height'));assert.equal(uwc.getZoomFactor(),1);
- reports.push('adaptive enlarged viewport: real AI click, typing and cross-site iframe input land correctly; logical viewport stays within configured screen');
+ reports.push('adaptive viewport capped at its screen: real AI click, typing and cross-site iframe input land correctly; logical viewport stays within configured screen');
  agent.run.scope=[a.id];await ui(`route('browser',${JSON.stringify(a.id)})`);
 
  // Full loop with deterministic model fixture.
@@ -176,7 +185,8 @@ app.whenReady().then(async()=>{try{
  assert.equal(agent.run.status,'已完成',JSON.stringify(agent.run.entries.slice(-3)));assert.equal(modelStep,4);
  await wait(()=>logs.filter(x=>x==='trusted:true').length===t0+1);
  const toolNames=payloads.find(p=>p.tools).tools.map(t=>t.function.name);assert(toolNames.includes('observe')&&toolNames.includes('act')&&toolNames.includes('dialog'));assert(!toolNames.includes('read_page')&&!toolNames.includes('click')&&!toolNames.includes('fill'));
- assert(!JSON.stringify(agent.memory.export()).includes('data:image/jpeg'),'screenshots not stored in memory');
+ assert(!JSON.stringify(agent.thread.export()).includes('data:image/jpeg'),'screenshots not stored with the conversation');
+ const stored=await require('../src/main/ai-dsh.cjs').history(agent.dshDir,agent.thread.sessionId);assert(stored.length>0);assert(!JSON.stringify(stored).includes('data:image/jpeg'),'screenshots not stored in the DSH session');
  const saved=fs.readdirSync(root).filter(f=>/^ai-/.test(f)).map(f=>{try{return fs.readFileSync(path.join(root,f),'utf8');}catch{return '';}}).join('');assert(!saved.includes('data:image/jpeg'));
  reports.push('agent loop: observe(screenshot) → act(ref) → observe → answer; one image at a time; legacy tools hidden; images not persisted');
  await ui("document.querySelector('#aiToggle').click()");await wait(()=>ui("!document.querySelector('#aiPanel').hidden"));

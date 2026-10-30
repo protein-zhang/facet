@@ -5,6 +5,10 @@ const {environment,sanitizeElectronUserAgent}=require('../src/main/environment.c
 test('default browser UA removes Electron runtime marker while explicit UA remains unchanged',()=>{
  assert.equal(sanitizeElectronUserAgent('Mozilla/5.0 Chrome/134.0.0.0 Electron/44.4.5 Safari/537.36'),'Mozilla/5.0 Chrome/134.0.0.0 Safari/537.36');
  assert.equal(sanitizeElectronUserAgent('Mozilla/5.0 Chrome/134.0.0.0 Safari/537.36'),'Mozilla/5.0 Chrome/134.0.0.0 Safari/537.36');
+ // The application name Electron inserts before Chrome/ (app.setName('千面 Facet')) is a runtime marker too.
+ const chrome='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7977.167 Safari/537.36';
+ assert.equal(sanitizeElectronUserAgent(chrome.replace('Chrome/','千面Facet/0.2.21 Chrome/').replace(' Safari',' Electron/44.9.3 Safari')),chrome);
+ assert.equal(sanitizeElectronUserAgent(chrome),chrome);
 });
 test('fingerprint defaults are opt-in and disruptive switches remain disabled',()=>{const f=normalize();assert.equal(f.enabled,false);for(const k of ['canvas','audio','rects','webgl'])assert.equal(f[k],false);assert.equal(script(environment()),null);});
 test('six reference presets validate with coherent screen and viewport',()=>{assert.equal(DEVICE_TEMPLATES.length,6);for(const t of DEVICE_TEMPLATES){const e=environment(preset(t.id,{language:'ja-JP',timezone:'Asia/Tokyo'},'fixed-seed'));assert.equal(e.language,'ja-JP');assert.equal(e.timezone,'Asia/Tokyo');assert(e.width<=e.fingerprint.screenWidth);assert(e.height<=e.fingerprint.screenHeight);assert.equal(e.fingerprint.canvas,false);assert.equal(e.fingerprint.webgl,false);assert.deepEqual(environment(e),e);}});
@@ -34,31 +38,45 @@ test('random preserves explicit layout choice and a later manual opt-out still s
 test('catalog import strips unknown/private fields, rejects incompatible renderers and deduplicates GPU aliases',()=>{
  const {gpuRecord}=require('../scripts/import-fingerprint-catalog.cjs');
  const row={webGLManufacturer:'Google Inc. (NVIDIA)',webGLRender:'ANGLE (NVIDIA, NVIDIA GeForce RTX 3070 (0x00002484) Direct3D11 vs_5_0 ps_5_0, driver.dll-1.2)',token:'private',hostIP:'private'};
- assert.deepEqual(gpuRecord(row),{brand:'NVIDIA',model:'NVIDIA GeForce RTX 3070'});
+ // The PCI device ID in the renderer is kept (normalized), the driver suffix and private fields are not.
+ assert.deepEqual(gpuRecord(row),{brand:'NVIDIA',model:'NVIDIA GeForce RTX 3070',id:'0x00002484'});
+ assert.deepEqual(gpuRecord({...row,webGLRender:'ANGLE (NVIDIA, NVIDIA GeForce RTX 3070 Direct3D11 vs_5_0 ps_5_0)'}),{brand:'NVIDIA',model:'NVIDIA GeForce RTX 3070'});
  for(const renderer of ['ANGLE (AMD, Radeon Direct3D11 vs_5_0 ps_5_0)','ANGLE (NVIDIA, NVIDIA GeForce GTX 560 Direct3D9Ex vs_3_0 ps_3_0)','ANGLE (NVIDIA, <script> Direct3D11 vs_5_0 ps_5_0)'])assert.equal(gpuRecord({...row,webGLRender:renderer}),null);
  const data=require('../src/main/fingerprint-catalog.json');
- assert.deepEqual(Object.keys(data).sort(),['gpus','schemaVersion','sources']);
+ assert.deepEqual(Object.keys(data).sort(),['gpus','schemaVersion','sources']);assert.equal(data.schemaVersion,2);
  assert.equal(new Set(data.gpus.map(g=>g.brand+'|'+g.model.toLowerCase())).size,data.gpus.length);
- for(const gpu of data.gpus)assert.deepEqual(Object.keys(gpu).sort(),['brand','model']);
+ for(const gpu of data.gpus){
+  assert.deepEqual(Object.keys(gpu).filter(k=>k!=='ids').sort(),['brand','model']);
+  if(gpu.ids){assert(gpu.ids.length&&gpu.ids.every(id=>/^0x[0-9A-F]{8}$/.test(id)));assert.deepEqual(gpu.ids,[...new Set(gpu.ids)].sort());}
+ }
+ assert(data.gpus.filter(g=>g.ids).length>=200,'device IDs for at least 200 models');
 });
 
 test('full catalog plans remain coherent over 2000 seeds without mutating input or applying source UA/timezone',()=>{
- const {ID,GPUS,SCREENS,CPUS,CPU_TIERS}=require('../src/main/fingerprint-catalog.cjs');
+ const {ID,GPUS,SCREENS,CPUS,CPU_TIERS,MEMORY,MEMORY_TIERS,drivable}=require('../src/main/fingerprint-catalog.cjs'),identity=require('../src/main/gpu-identity.cjs');
  const base=environment({language:'ja-JP',timezone:'Asia/Tokyo',geoEnabled:true,latitude:35,longitude:139});
  const original=JSON.stringify(base),seenGPU=new Set(),seenCPU=new Set(),seenScreen=new Set(),seenMemory=new Set();
  for(let i=0;i<2000;i++){
   const plan=environment(preset(ID,base,'catalog-'+i)),f=plan.fingerprint;
   assert.equal(plan.language,base.language);assert.equal(plan.timezone,base.timezone);assert.equal(plan.longitude,139);
-  assert.equal(f.hardware,true);assert.equal(f.touch,0);assert.equal(f.colorDepth,24);assert([4,8].includes(f.memory));
-  const gpu=GPUS.find(g=>g.vendor===f.vendor&&g.renderer===f.renderer);assert(gpu);assert(CPUS.includes(plan.cpu));
+  assert.equal(f.hardware,true);assert.equal(f.touch,0);assert.equal(f.colorDepth,24);
+  // Chrome's full renderer format, with a device ID the catalog has seen for that model.
+  assert.match(f.renderer,/^ANGLE \((NVIDIA|AMD|Intel), .+ \(0x[0-9A-F]{8}\) Direct3D11 vs_5_0 ps_5_0, D3D11\)$/);
+  const parsed=identity.parseRenderer(f.renderer),gpu=GPUS.find(g=>g.vendor===f.vendor&&g.brand===parsed.brand&&g.model===parsed.model);
+  assert(gpu&&gpu.ids.includes(parsed.id),f.renderer);assert(CPUS.includes(plan.cpu));
+  assert(MEMORY_TIERS[gpu.tier].includes(f.memory),`${f.memory} GB for ${gpu.model} (${gpu.tier})`);
   // The thread count must be plausible for the chosen GPU's tier (no UHD 617 + 24 threads).
   assert(CPU_TIERS[gpu.tier].includes(plan.cpu),`incoherent ${plan.cpu}T for ${gpu.model} (${gpu.tier})`);
   assert(SCREENS.some(s=>s.width===f.screenWidth&&s.height===f.screenHeight&&s.dpr===plan.scale));
+  // Without a fixed viewport or display floor, an old/entry GPU never lands on a 4K-class panel.
+  assert(drivable(gpu.tier,{width:f.screenWidth,height:f.screenHeight,dpr:plan.scale}),`${gpu.model} (${gpu.tier}) on ${f.screenWidth}x${f.screenHeight}@${plan.scale}`);
   assert.equal(plan.width,0);assert.equal(plan.height,0);assert(plan.width<=f.screenWidth&&plan.height<=f.availHeight);assert(f.memory!==4||plan.cpu<=8);
   assert.deepEqual(environment(plan),plan);assert.deepEqual(preset(ID,base,'catalog-'+i),preset(ID,base,'catalog-'+i));
   seenGPU.add(f.renderer);seenCPU.add(plan.cpu);seenScreen.add([f.screenWidth,f.screenHeight,plan.scale].join(':'));seenMemory.add(f.memory);
  }
- assert(seenGPU.size>400);assert.equal(seenCPU.size,CPUS.length);assert.equal(seenScreen.size,SCREENS.length);assert.equal(seenMemory.size,2);
+ assert(seenGPU.size>200,'renderers seen: '+seenGPU.size);assert.equal(seenCPU.size,CPUS.length);assert.equal(seenScreen.size,SCREENS.length);assert.deepEqual([...seenMemory].sort((a,b)=>a-b),MEMORY);
+ // Available height leaves the Windows 11 taskbar.
+ for(const s of SCREENS)assert.equal(s.height-s.availHeight,48);
  assert.equal(JSON.stringify(base),original);
 });
 
@@ -97,4 +115,97 @@ test('a custom or runtime-drifted Chrome UA derives version-matched brands inste
  assert.equal(customMetadata({userAgent:'Mozilla/5.0 (Windows NT 10.0) Gecko/20100101 Firefox/133.0'},native),null);
  assert.equal(customMetadata({userAgent:drift,platform:'MacIntel'},native),null);
  assert.equal(customMetadata({userAgent:drift},{metadata:null}),null);
+});
+
+test('library screens are at least as large as the display when the app reports one',()=>{
+ const catalog=require('../src/main/fingerprint-catalog.cjs');
+ try{
+  // A 1280x720 screen on a 2048x1152 desktop leaves a margin around the 1:1 page once maximized.
+  catalog.setDisplayProvider(()=>({width:2048,height:1152}));
+  for(let i=0;i<300;i++){const {screen}=catalog.generate('floor-'+i,{},true);assert(screen.width>=2048&&screen.height>=1152,`${screen.width}x${screen.height}`);}
+  // Fixed viewports still need a screen that contains them.
+  for(let i=0;i<50;i++){const {screen}=catalog.generate('floor-fixed-'+i,{width:3000,height:1400},true);assert(screen.width>=3000&&screen.height>=1400);}
+  // A display larger than every library screen, or one that cannot be read, keeps the full pool.
+  catalog.setDisplayProvider(()=>({width:5120,height:2880}));
+  const seen=new Set();for(let i=0;i<300;i++)seen.add(catalog.generate('floor-'+i,{},true).screen.width);assert(seen.size>3);
+  catalog.setDisplayProvider(()=>{throw Error('no display');});assert(catalog.generate('floor-x',{},true).screen);
+ }finally{catalog.setDisplayProvider(null);}
+});
+
+test('with the display DPR known, new plans use it so cross-site iframes agree with the page',()=>{
+ const catalog=require('../src/main/fingerprint-catalog.cjs');
+ const fp=plan=>[plan.scale,plan.fingerprint.screenWidth,plan.fingerprint.screenHeight,plan.fingerprint.availHeight];
+ try{
+  // This machine: a 2560x1440 panel at 125% (2048x1152 DIP). Cross-site iframes report 1.25 whatever the plan says.
+  catalog.setDisplayProvider(()=>({width:2048,height:1152,scaleFactor:1.25}));
+  const seen=new Set();
+  for(let i=0;i<500;i++){
+   const plan=environment(preset('library-v1',{},'dpr-'+i)),f=plan.fingerprint;
+   assert.equal(plan.scale,1.25);
+   assert(catalog.PANELS.some(p=>p.width===f.screenWidth*1.25&&p.height===f.screenHeight*1.25),`${f.screenWidth}x${f.screenHeight} is a real panel at 125%`);
+   assert(f.screenWidth>=2048&&f.screenHeight>=1152);assert.equal(f.screenHeight-f.availHeight,48);
+   seen.add(f.screenWidth+'x'+f.screenHeight);
+  }
+  assert.deepEqual([...seen].sort(),['2048x1152','2752x1152','3072x1728']);
+  // One-click random with screens and the fixed device templates follow it too (same physical panel).
+  for(let i=0;i<60;i++)assert.equal(environment(preset('random',{},'dpr-r-'+i,{screen:true})).scale,1.25);
+  assert.deepEqual(fp(environment(preset('win-nvidia-qhd',{},'t'))),[1.25,2048,1152,1104]);
+  assert.deepEqual(fp(environment(preset('win-intel-fhd',{},'t'))),[1.25,1536,864,816]);
+  assert.deepEqual(fp(environment(preset('win-intel-iris',{},'t'))),[1.25,1536,864,816]);
+  // Without the option one-click random still keeps the stored screen and DPR (old instances are not changed).
+  const old=environment({scale:1,fingerprint:{enabled:true,hardware:true,screenWidth:2560,screenHeight:1080,availHeight:1032}});
+  assert.deepEqual(fp(environment(preset('random',old,'keep'))),[1,2560,1080,1032]);
+
+  // 150%: panels that do not divide exactly (2560x1440 -> 1706.67) are left out; the display itself is kept.
+  catalog.setDisplayProvider(()=>({width:1707,height:960,scaleFactor:1.5}));
+  assert.deepEqual(catalog.screenPool().map(s=>s.width+'x'+s.height+'@'+s.dpr),['960x600@1.5','1280x720@1.5','1280x800@1.5','2560x1440@1.5','1707x960@1.5']);
+  const at150=new Set();for(let i=0;i<200;i++){const plan=environment(preset('library-v1',{},'dpr150-'+i));assert.equal(plan.scale,1.5);at150.add(plan.fingerprint.screenWidth+'x'+plan.fingerprint.screenHeight);}
+  assert.deepEqual([...at150].sort(),['1707x960','2560x1440']);
+  // A template panel is sized like Chromium sizes the display (rounded up): 2560x1440 at 150% is 1707x960.
+  assert.deepEqual(fp(environment(preset('win-nvidia-qhd',{},'t'))),[1.5,1707,960,912]);
+
+  // 110%: Chromium reports 1.100000023841858; the plan keeps that exact value so the emulated DPR equals the native one.
+  catalog.setDisplayProvider(()=>({width:1746,height:982,scaleFactor:1.100000023841858}));
+  const at110=environment(preset('library-v1',{},'dpr110'));assert.deepEqual(fp(at110),[1.100000023841858,1746,982,934]);
+
+  // A template the environment cannot store at that DPR (1920x1080 at 300% is 640x360) falls back to the display.
+  catalog.setDisplayProvider(()=>({width:1280,height:720,scaleFactor:3}));
+  assert.deepEqual(fp(environment(preset('win-intel-fhd',{},'t'))),[3,1280,720,672]);
+
+  // Unknown or unsupported DPR keeps the fallback table.
+  for(const display of [{width:2048,height:1152},{width:2048,height:1152,scaleFactor:3.5},{width:2048,height:1152,scaleFactor:0.5}]){
+   catalog.setDisplayProvider(()=>display);assert.equal(catalog.screenPool(),catalog.SCREENS);
+   assert.deepEqual(fp(environment(preset('win-nvidia-qhd',{},'t'))),[1,2560,1440,1392]);
+  }
+ }finally{catalog.setDisplayProvider(null);}
+});
+
+test('new plans report the touch points of the machine Facet runs on',()=>{
+ const catalog=require('../src/main/fingerprint-catalog.cjs');
+ try{
+  // A touchscreen makes Chromium report any-pointer: coarse, which no override can hide; 0 touch points would contradict it.
+  catalog.setTouchProvider(()=>10);
+  for(const id of ['library-v1','random','win-intel-iris'])assert.equal(environment(preset(id,{},'touch-seed')).fingerprint.touch,10,id);
+  for(const bad of [()=>0,()=>-1,()=>11,()=>'x',()=>{throw Error('no window');}]){catalog.setTouchProvider(bad);assert.equal(environment(preset('library-v1',{},'touch-seed')).fingerprint.touch,0);}
+ }finally{catalog.setTouchProvider(null);}
+ assert.equal(environment(preset('library-v1',{},'touch-seed')).fingerprint.touch,0,'no provider: 0');
+});
+
+test('one-click random can also randomize the screen and DPR on request, keeping the viewport',()=>{
+ const {SCREENS}=require('../src/main/fingerprint-catalog.cjs');
+ for(const patch of [{width:0,height:0,scale:1.25},{width:1760,height:920,scale:1}]){
+  const base=environment({...patch,fingerprint:{enabled:true,hardware:false,screenWidth:1920,screenHeight:1080,availHeight:1040}});const seen=new Set();
+  for(let i=0;i<60;i++){
+   const next=environment(preset('random',base,'screen-'+i,{screen:true})),f=next.fingerprint;
+   assert.equal(next.width,base.width);assert.equal(next.height,base.height);
+   assert(SCREENS.some(s=>s.width===f.screenWidth&&s.height===f.screenHeight&&s.availHeight===f.availHeight&&s.dpr===next.scale),`${f.screenWidth}x${f.screenHeight}@${next.scale}`);
+   assert(f.screenWidth>=base.width&&f.screenHeight>=base.height,'screen still contains a fixed viewport');
+   assert.equal(f.hardware,true,'a randomized screen is only reported with the hardware override on');
+   seen.add(f.screenWidth+'x'+f.screenHeight+'@'+next.scale);
+  }
+  assert(seen.size>3,'screens actually vary: '+[...seen].join(','));
+ }
+ // Without the option the existing behaviour is unchanged (covered above): screen and DPR are kept.
+ const base=environment({scale:1.25,fingerprint:{screenWidth:1920,screenHeight:1080,availHeight:1040}}),kept=environment(preset('random',base,'keep'));
+ assert.deepEqual([kept.scale,kept.fingerprint.screenWidth,kept.fingerprint.screenHeight],[1.25,1920,1080]);
 });

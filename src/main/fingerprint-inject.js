@@ -88,7 +88,44 @@
       define(Screen.prototype,'colorDepth',fp.ColorDepth);
       define(Screen.prototype,'pixelDepth',fp.ColorDepth);
     }
+    // window.outerWidth/outerHeight are the real Facet window. On a simulated screen smaller
+    // than that window they exceeded screen.width/availHeight, which no real machine reports.
+    // Clamp them to the available area (a maximized window); smaller windows stay native, so
+    // they keep following resizes. The page view is sized to fit inside (viewport.cjs).
+    if (!worker) {
+      var clampWindow = function (key, limit) {
+        try {
+          var d = Object.getOwnPropertyDescriptor(root, key);
+          if (!d || typeof d.get !== 'function' || !d.configurable || !(limit > 0)) return;
+          var nativeGet = d.get;
+          Object.defineProperty(root, key, { ...d, get: markNative(function () {
+            var v = apply(nativeGet, this, []);
+            return typeof v === 'number' && v > limit ? limit : v;
+          }, nativeGet) });
+        } catch (e) {}
+      };
+      clampWindow('outerWidth', fp.ScreenWidth);
+      clampWindow('outerHeight', fp.AvailableScreenHeight);
+    }
   }
+  /* ---------------- devicePixelRatio 精度 ----------------
+   * 模拟 DPR 在 Chromium 里按“原生缩放 × 模拟/原生”的 float32 计算，页面读到 1.0000000149011612、
+   * 1.5000000596046448 之类的值；真实 Chrome 在 100% 缩放下报告精确值，并与 resolution 媒体查询一致。
+   * 这里只把与配置值相差不到 1e-6 的舍入残差改回配置值；页面缩放等其他取值原样返回。
+   * 跨站 iframe（独立进程）不接收模拟，仍是原生值，与它自己的 CSS 媒体查询一致，不在这里改。 */
+  if (!worker && typeof fp.DevicePixelRatio === 'number' && fp.DevicePixelRatio > 0) try {
+    var dprDescriptor = Object.getOwnPropertyDescriptor(root, 'devicePixelRatio');
+    if (dprDescriptor && typeof dprDescriptor.get === 'function' && dprDescriptor.configurable) {
+      var nativeDpr = dprDescriptor.get, wantedDpr = fp.DevicePixelRatio;
+      Object.defineProperty(root, 'devicePixelRatio', {
+        ...dprDescriptor,
+        get: markNative(function () {
+          var v = apply(nativeDpr, this, []);
+          return typeof v === 'number' && abs(v - wantedDpr) < 1e-6 ? wantedDpr : v;
+        }, nativeDpr),
+      });
+    }
+  } catch (e) {}
   /* ---------------- window.chrome 外观 ----------------
    * 真实 Chrome 的 window.chrome 带 app / csi / loadTimes；Electron 只留一个空对象，
    * 是常见的自动化/非 Chrome 标志。这里在窗口上补齐这三项（Worker 没有 window.chrome 不处理），
@@ -316,6 +353,44 @@
   };
   if (fp.WebGL) {patchWebGl(root.WebGLRenderingContext);patchWebGl(root.WebGL2RenderingContext);}
 
+  /* ---------------- WebGPU 适配器信息 ----------------
+   * 与 WebGL 渲染器对应的 GPUAdapterInfo（adapter.info / device.adapterInfo 共用同一原型）：
+   * vendor / architecture 换成模拟显卡的值，device、description 原生本就为空，不改。
+   * 模拟的显卡没有 Direct3D 12（NVIDIA Fermi 及更早、AMD TeraScale、Intel Sandy/Ivy Bridge）时，
+   * 真实 Chrome 拿不到适配器：requestAdapter() 先走原生（保留接收者和参数校验），结果改为 null。
+   * limits、features 和子组大小仍是本机显卡的值。 */
+  // In a Dedicated Worker paused at start (where this runs) navigator.gpu exists but the GPU and
+  // GPUAdapterInfo globals are not installed yet (measured), so the prototypes are reached through
+  // navigator.gpu and the first adapter instead.
+  if (fp.WebGpu && typeof fp.WebGpu === 'object') try {
+    var getProto = Object.getPrototypeOf, ownDescriptor = Object.getOwnPropertyDescriptor;
+    var patchedInfo = new WeakSet();
+    var patchInfo = function (proto) {
+      if (!fp.WebGpu.Supported || !proto || apply(setHas, patchedInfo, [proto])) return;
+      apply(setAdd, patchedInfo, [proto]);
+      define(proto, 'vendor', NativeString(fp.WebGpu.Vendor || ''));
+      define(proto, 'architecture', NativeString(fp.WebGpu.Architecture || ''));
+    };
+    if (root.GPUAdapterInfo) patchInfo(GPUAdapterInfo.prototype);
+    var gpuObject = root.navigator && root.navigator.gpu;
+    var gpuProto = root.GPU ? GPU.prototype : gpuObject ? getProto(gpuObject) : null;
+    if (gpuProto && typeof gpuProto.requestAdapter === 'function') {
+      var nativeRequestAdapter = gpuProto.requestAdapter, adapterThen = Promise.prototype.then;
+      gpuProto.requestAdapter = markNative(function () {
+        var pending = apply(nativeRequestAdapter, this, arguments);
+        return apply(adapterThen, pending, [function (adapter) {
+          if (!fp.WebGpu.Supported) return null;
+          if (adapter) try {
+            var infoDescriptor = ownDescriptor(getProto(adapter), 'info');
+            var info = infoDescriptor && infoDescriptor.get ? apply(infoDescriptor.get, adapter, []) : null;
+            if (info) patchInfo(getProto(info));
+          } catch (e) {}
+          return adapter;
+        }]);
+      }, nativeRequestAdapter);
+    }
+  } catch (e) {}
+
   /* ---------------- Audio 指纹 ----------------
    * 只处理离线渲染产物；读取用户 AudioBuffer 不得修改其底层数据，
    * getChannelData 与 copyFromChannel 保留原生引用、写回和错误语义。 */
@@ -323,18 +398,18 @@
     if (root.OfflineAudioContext && root.AudioBuffer) {
       var originalAudio = AudioBuffer.prototype.getChannelData;
       var rendered = new WeakSet();
+      // One fixed gain per seed on every rendered sample, 1e-6–1e-5 relative. A single nudged
+      // sample (the old approach) never reached the window audio fingerprints sum (samples
+      // 4500–5000), so every instance reported the same 124.04347… value. The gain moves that
+      // sum from the 4th–5th decimal, is stable across renders, keeps silence at zero and is
+      // far below audibility.
+      var audioGain = 1 + ((abs(fp.AudioSeed) % 2 ? 1 : -1) * (1 + (abs(fp.AudioSeed) >>> 1) % 9000 / 1000) * 1e-6);
       var noiseAudio = function (buffer) {
         if (!buffer || apply(setHas, rendered, [buffer])) return buffer;
         apply(setAdd, rendered, [buffer]);
         for (var channel = 0; channel < buffer.numberOfChannels; channel++) {
           var data = apply(originalAudio, buffer, [channel]);
-          // Do not create a signal in silence or change manually written buffers.
-          for (var i = abs(fp.AudioSeed) % 97; i < data.length; i += 97) {
-            if (data[i] !== 0) {
-              data[i] += (((abs(fp.AudioSeed) % 11) + 1) * 1e-8);
-              break;
-            }
-          }
+          for (var i = 0; i < data.length; i++) if (data[i] !== 0) data[i] *= audioGain;
         }
         return buffer;
       };

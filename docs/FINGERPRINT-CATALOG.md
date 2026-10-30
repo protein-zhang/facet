@@ -9,9 +9,10 @@
 | 项目 | 当前候选 |
 | --- | --- |
 | GPU 字符串 | 482 条：NVIDIA 188、AMD 228、Intel 66；是规范化候选，不保证等于 482 种独立物理 GPU |
-| 屏幕与 DPR 组合 | 13 套，11 种逻辑分辨率；DPR 1 / 1.25 / 1.5 / 2 |
+| 屏幕与 DPR 组合 | 应用内：DPR 固定为本机显示器的值，10 种物理分辨率按它换算（只取能整除的）再加本机显示器本身（2026-10-27 起）；读不到显示器时（单元测试）用旧表 13 套，DPR 1 / 1.25 / 1.5 / 2 |
 | CPU 线程 | 6 / 8 / 12 / 16 / 20 / 24 / 28 / 32 |
-| 内存报告 | 4 / 8 GB，按千面当前校验范围生成 |
+| 内存报告 | 4 / 8 / 16 / 32 GB，按显卡档位生成（2026-10-27 起；之前 4 / 8） |
+| 设备 ID | 206 款型号带来源中的 PCI 设备 ID（共 309 个）；新方案只从这些型号中选 |
 | 桌面触摸、色深 | 0 个触点、24 位；不为增加差异而强制轮换 |
 
 保留六个旧设备预设及其 ID。库位于 `src/main/fingerprint-catalog.json`，规则位于 `src/main/fingerprint-catalog.cjs`。源文件名称、行数和 SHA256 用于核对来源，不保留个人绝对路径、账号、代理、订阅、计算机名、MAC、签名或云端加密字段，也不复制第三方生成器代码。
@@ -20,9 +21,9 @@
 
 ## 取长补短
 
-1. GPU 厂商与型号作为一个条目选取；不独立拼接。只覆盖 WebGL 厂商/渲染器字符串，不宣称参数上限、扩展及 WebGPU 已对应。
+1. GPU 厂商与型号作为一个条目选取；不独立拼接。覆盖 WebGL 厂商/渲染器字符串和 WebGPU 适配器的 vendor / architecture（2026-10-27 起），不宣称参数上限、扩展、WebGPU limits 已对应。
 2. 屏幕、DPR、任务栏可用高度作为一组。抽取屏幕不会自动把浏览视口设成屏幕宽高；未手动固定时保持 0×0 自适应。显式固定视口保留，筛选可容纳它的屏幕。
-3. CPU 与内存按千面的桌面策略组合：6/8 线程可报 4/8 GB，其他档位报 8 GB。这是候选策略，不是物理硬件定律。
+3. CPU 与内存按显卡档位组合：低端 4/8 GB，中端 8/16/32 GB，高端 16/32 GB，4 GB 只配 ≤8 线程（2026-10-27 起；之前 6/8 线程报 4/8 GB、其他报 8 GB）。这是候选策略，不是物理硬件定律。
 4. 不照搬“Intel 不能接 4K”等样本分组。所有厂商都可选择屏幕池；颜色偏好等使用独立的种子标签，避免序号轮转造成字段绑定。
 5. 不复制来源的 Chrome 154、语言、上海时区和触摸点 10。UA 使用当前 Electron 所带 Chromium 版本；语言、时区、固定定位沿用表单或由现有出口同步流程设置。
 6. 同一固定种子与同一库版本可复现生成；实际字段完整写入实例。启动只读取保存值，不重新抽取；更换库也不自动改变已保存实例。种子、配置不同不代表检测站不可关联或无法检测。
@@ -36,9 +37,48 @@ GPU 厂商先按等概率选择，再在厂商池中选条目；屏幕/CPU 候�
 - **新建/批量创建的随机环境**：生成整套库方案；出口语言/时区同步仍按原流程处理。
 - **重置环境**：清除网站数据，并重新生成整套屏幕/DPR/硬件，视口恢复自适应；保留代理、名称、备注、语言、时区及原有固定定位策略。已清除的网站数据不可普通撤销。
 - 旧版本已保存的大固定视口不自动迁移：可将视口宽、高都改为 0，保存后重新启动实例。无需执行环境重置或清除网站数据。默认原生方案与旧实例不自动迁移。修改源码后，用户正在运行的应用需重启 Electron 主进程才使用新生成器。
-- API `fingerprint-preset` 的 `preset` 可用 `library-v1`；`random` 保留原有浏览尺寸保护。输入/输出继续走环境校验。
+- API `fingerprint-preset` 的 `preset` 可用 `library-v1`；`random` 保留原有浏览尺寸保护，额外传 `randomScreen:true` 时同时随机屏幕和像素比。输入/输出继续走环境校验。
 
 当前版本生成的 Windows UA 与运行内核一致时，保留原生 Windows UA-CH 数据；显式编辑 UA/平台或旧版本 UA（如实例保存的 UA 在内核升级后落后于运行版本）时，`customMetadata` 从该 UA 自身的 `Chrome/<版本>` 推导 brands 与 fullVersionList，并复用原生 GREASE 项与 OS 字段，让页面的 UA 串、brands、fullVersionList 自洽；非 Chrome 或非 Windows 的自定义 UA 仍沿用清空 UA-CH 的旧策略。关闭参考覆盖后恢复原生方案。
+
+## 2026-10-27（二）新方案的 DPR 跟随本机显示器（源码修改，未发布）
+
+起因：跨站 iframe 在独立进程里，Chromium 不把 DevTools 的设备模拟传给它，对 iframe 目标发 `setDeviceMetricsOverride` 也会被拒绝（`Command can only be executed on top-level targets`）。所以 iframe 里的 `devicePixelRatio`、`matchMedia('(resolution: …)')` 和样式表 `@media` 一律是本机值，屏幕尺寸倒是与主页面一致。Turnstile、hCaptcha 等验证框正是跨站 iframe，模拟 DPR 与本机不同时，它们看到的 DPR 与主页面对不上。本机显示器为 1.25，用户 16 个实例中有 14 个是 1 或 1.5；旧生成器在这台机器上也只会抽到 1 或 1.5。
+
+对比过三种做法（`.local-dev/oopif-dpr-20261027/probe.cjs`）：页面缩放（倍数 = 目标 ÷ 本机）能让两边都报精确值，但网页会按倍数变大或变小，缩放还按主机名保存；关闭站点隔离能让 iframe 继承模拟值，但属于全局安全降级。用户选择让新方案直接使用本机 DPR，旧实例不动。
+
+- **生成器**（`fingerprint-catalog.cjs`）：`main.cjs` 的显示器提供者带上 `scaleFactor`。整套随机、一键随机并随机屏幕、六个设备预设，都把 DPR 设为本机值（保持 Chromium 报告的原值，如 110% 为 1.100000023841858，模拟值与原生值完全相等）。屏幕取 10 种物理分辨率（1280×720 至 3840×2160）按本机 DPR 换算，只保留能整除的，再加上本机显示器本身；之后照旧按显示器下限、固定视口和显卡档位筛选。本机（2560×1440 面板，125%）的新方案只会是 2048×1152、2752×1152、3072×1728。设备预设保持同一块物理屏幕，例如 RTX 3070 · 2K 在本机为 2048×1152@1.25，在 150% 的电脑上为 1707×960（Chromium 按外接矩形向上取整）；换算后超出环境范围的回退到本机显示器。读不到 DPR 时用旧表。
+- **环境页提示**（`workspace.js`）：像素比不为 0 且与本机显示器不同时，提示跨站 iframe 里仍是本机值，并建议勾选「同时随机屏幕」后一键随机。
+- **不变**：已保存的实例、不随机屏幕的一键随机、手动填写的像素比都保持原样。之后在另一台显示器上运行或更改了 Windows 缩放，已保存方案的 DPR 不会自动跟随，iframe 会再次与主页面不一致（环境页会提示）。同一台电脑上的新实例 DPR 都相同，靠屏幕、显卡、CPU、Canvas 等区分。
+
+## 2026-10-27 显卡读数与真实 Chrome 对齐：WebGPU、渲染器格式、内存上限、任务栏（源码修改，未发布）
+
+起因：核对万花资料时发现四处与真实 Chrome 152 不一致。用户选择方案 A：渲染器格式、内存和可用高度只用于之后新生成的方案（新建、批量、重置、一键随机、选用预设），已保存的实例保持原值；WebGPU 一致性对所有开启 WebGL 覆盖的实例生效。
+
+- **WebGPU 适配器信息**（`gpu-identity.cjs` + `fingerprint-inject.js`）：之前 WebGL 报模拟显卡，`navigator.gpu` 的 `GPUAdapterInfo` 却是本机真实显卡（实测 WebGL「GT 630」、WebGPU `nvidia` / `lovelace`）。现在 `vendor` / `architecture` 按 WebGL 渲染器给出：有设备 ID 时按 Dawn `gpu_info.json`（google/dawn main，最后改动 2026-05-05）的设备 ID → 架构表，名称规则与 Dawn 相同（如 `gen-12lp`、`rdna-2`）；旧格式（无设备 ID）的已保存渲染器先用候选库里同型号的设备 ID（按实例种子固定选一个），没有时按型号名称推断，推断不出时架构为空（Chrome 对未收录的设备 ID 也报空）。模拟显卡没有 Direct3D 12（NVIDIA Tesla/Fermi、AMD TeraScale、Intel Sandy/Ivy Bridge）时 `requestAdapter()` 结果为 `null`，与真实 Chrome 一致。页面、Dedicated Worker、跨站 iframe 都覆盖；Worker 在注入时还没有 `GPU`/`GPUAdapterInfo` 全局，经 `navigator.gpu` 和首个适配器取原型。`device`、`description` 原生为空，不改。
+- **未覆盖**：WebGPU 的 limits、features、子组大小仍是本机显卡的值；HTTP 的 `Device-Memory` 客户端提示在本机回环夹具里没有发送（请求 `Accept-CH` 后再请求，头为空），没有在外部 HTTPS 站点验证。
+- **渲染器格式**（`fingerprint-catalog.json` schemaVersion 2 + `scripts/import-fingerprint-catalog.cjs`）：真实 Chrome 报 `ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Laptop GPU (0x000028A0) Direct3D11 vs_5_0 ps_5_0, D3D11)`，旧生成器缺设备 ID 和 `, D3D11`。导入脚本改为保留来源里的设备 ID（同样两份来源，SHA256 不变，482 款型号不变），206 款有设备 ID（共 309 个）。新方案只从这 206 款里选，并按种子选其中一个设备 ID；六个预设也改为带设备 ID 的格式。用 Dawn 的设备 ID → 架构核对型号名称：除 APU 集显（R2–R7 Graphics 跨代复用名称）和一个山寨卡名（GTX 2060 6GB）外一致。
+- **内存**：Chrome 桌面端现在最高报 32（blink-dev「Update Device Memory API limits」，本机原生 32）。新方案按显卡档位：低端 4/8，中端 8/16/32（16 居多），高端 16/32；4 GB 只配 ≤8 线程。校验允许 1/2/4/8/16/32。
+- **可用高度**：屏幕池的可用高度改为高度减 48（Windows 11 任务栏，本机实测 1152→1104），与实例报告的 UA-CH `platformVersion`（原生 19.0.0，即 Windows 11）一致；之前按 Windows 10 的 40。
+- **触屏**（`fingerprint-catalog.cjs` `setTouchProvider` + `main.cjs`）：本机有触摸屏时，实例 `maxTouchPoints` 报 0，但 CSS `any-pointer: coarse` 仍为真（CreepJS 同时显示 `touch device: true` 与 `touch: 0`）。这个媒体查询由 Chromium 按系统数字化仪判断（`ui/base/pointer/pointer_device_win.cc`），没有覆盖入口：`Emulation.setEmulatedMedia` 接受 `pointer`/`any-pointer`/`hover`/`any-hover` 但不生效（页面与跨站 iframe 实测），Electron 也没有对应选项；只改 JS 的 `matchMedia` 会与样式表里的媒体查询矛盾。因此新方案的触摸点改为本机的值（主窗口加载后读 `navigator.maxTouchPoints`，本机 10；没有触摸屏的电脑仍为 0），与媒体查询一致，相当于一台带触摸屏的电脑。已保存的实例保持原值（按方案 A），需要时可在环境配置的「最大触摸点」里改为 10。
+
+## 2026-10-26（二）多账号审计反馈：音频、窗口尺寸、高端显卡配小屏（源码修改，未发布）
+
+起因：用户转来一份 6 个账号的对比审计，指出音频指纹 6 个完全相同、`outerWidth/outerHeight` 全部 1454×969 且大于部分账号的屏幕、RTX 5060 Laptop 配 1366×768，以及字体列表 6 个相同。
+
+- **音频指纹**（`fingerprint-inject.js`）：旧噪声每个声道只改动一个采样（位置在前 97 个采样内），而常见音频指纹取第 4500–5000 个采样的绝对值之和，所以所有实例都报同一个 `124.04347…`。现在按种子给离线渲染结果的每个非零采样乘一个固定增益（相对 1e-6～1e-5），这个和从小数点后第 4～5 位开始因实例而异；同一实例重复渲染结果不变，静音仍为 0，`getChannelData`/`copyFromChannel`/事件与 Promise 读到同一份数据。实测两个种子分别为 `124.04280434999964`、`124.04240644474339`，各自两次渲染一致。
+- **窗口尺寸**（`fingerprint-inject.js` + `viewport.cjs`）：`window.outerWidth/outerHeight` 是千面主窗口的真实尺寸，模拟屏幕小于主窗口时会大于 `screen.width`/`availHeight`。开启硬件覆盖时，这两个值不超过模拟屏幕的可用区域（相当于最大化窗口），窗口更小时仍按真实尺寸跟随缩放；跨站 iframe 读到的值相同。网页显示区域的高度同时限制为可用高度减 80（浏览器标签栏与工具栏的位置），保证 `innerHeight < outerHeight`。实测模拟 1366×768（可用 728）、主窗口 1454×969 时：outer 1366×728、inner 1226×648；模拟 2560×1440 时 outer 保持真实 1456×972。`screenX/screenY` 和鼠标事件坐标不改，避免主页面与跨站 iframe 的屏幕坐标不一致（#10 的人机验证问题）。
+- **高端显卡配小屏**（`fingerprint-catalog.cjs`）：high 档屏幕物理分辨率至少 1920×1080，不再配 1280×720、1366×768、1440×900、1600×900。
+- **未解决：字体**。字体列表来自宿主机，按测量文字宽度检测，网页 JS 无法在不破坏排版的情况下隐藏已安装字体；中文系统上的 SimHei、KaiTi 等会出现在所有实例里。需要内核层的字体过滤，记入已知限制。
+- **未解决：同一主窗口里的实例窗口尺寸相同**。屏幕大于主窗口的实例，outer/inner 都等于主窗口及其浏览区域的尺寸，各实例相同。需要区分时可给实例设置不同的固定视口。
+
+## 2026-10-26 DPR 精度、原生 UA 应用名与老显卡配套（源码修改，未发布）
+
+- **devicePixelRatio 精度**（`fingerprint-inject.js`）：模拟 DPR 时主页面读到 `1.0000000149011612`、`1.5000000596046448`、`2.0000000298023224`（Chromium 按原生缩放 × 模拟/原生做 float32 运算），而 `resolution` 媒体查询匹配的是精确值；真实 Chrome 在 100% 缩放下报告精确值。现在与配置值相差不到 1e-6 的残差改回配置值，getter 的 `toString` 保持原生样式；其他取值（如页面缩放后）原样返回。只在开启指纹覆盖且设置了 DPR 时生效。
+- **跨站 iframe 的 DPR 仍是原生值**：独立进程 iframe 不接收 `Emulation.setDeviceMetricsOverride`（实测对 iframe 目标返回「Command can only be executed on top-level targets」），DPR 与 `resolution` 媒体查询都按真实显示器（本机 1.25）。这里不改：只改 JS 读数会让 iframe 内的 DPR 与它自己的 CSS 媒体查询矛盾。模拟 DPR 与真实显示器不同的实例，主页面与跨站 iframe 的 DPR 会不同；彻底一致需要内核把模拟屏幕信息传给子框架，或者只使用与真实显示器相同的 DPR。
+- **原生 UA 不再带应用名**（`environment.cjs` `nativeUserAgent`）：Electron 默认 UA 在 `Chrome/` 前插入应用名（`app.setName('千面 Facet')` 得到 `千面Facet/<版本>`，含非 ASCII），旧代码只去掉了 `Electron/<版本>`。未填写 UA 的实例现在报告纯 Chrome UA。原生值取自 `app.userAgentFallback`，不再取会话当前值：会话设过自定义 UA 后，清空 UA 在同一次运行里也能回到原生（旧代码会一直沿用旧的自定义 UA）。当前用户实例都保存了显式 UA，不受应用名问题影响；新建的原生环境实例会受影响。
+- **老显卡配套**（`fingerprint-catalog.cjs`）：low 档线程池加入 4（Intel HD 2000–6000、AMD HD 7xx0G 时代的 i5-3210M、A8-4500M 等多为 4 线程），现为 low=[4,6,8]。low 档屏幕限制为物理分辨率不超过 2560×1600，不再配 3840×2160、1920×1080@2、2560×1440@1.5 或 3440×1440；mid/high 档不受限。选择顺序：先容纳固定视口，再满足显示器下限，最后按档位；后两者冲突时保留显示器下限，避免 1:1 页面四周留白。
+- 验证：`tests/fingerprint.test.cjs` 2000 种子用例新增档位屏幕断言、UA 清理新增应用名用例；Electron 探针确认主页面 DPR 在 1 / 1.25 / 1.5 / 2 下为精确值且与媒体查询一致、跨站 iframe 保持原生；带真实应用名的实例原生 UA 与请求头均无应用名和 Electron 标记，设置自定义 UA 后再清空回到原生 `.167`。
 
 ## 2026-10-24 检测对抗：CPU/显卡配套、window.chrome 与自定义 UA 的 UA-CH（源码修改，未发布）
 
@@ -56,6 +96,7 @@ GPU 厂商先按等概率选择，再在厂商池中选条目；屏幕/CPU 候�
 - 当前 Electron 44.4.5 的原生对照和库实例在受控 HTTPS 上均未发送 `Sec-CH-UA-*` 请求头；页面 `navigator.userAgentData` 与 UA 版本一致。不能把 JS 元数据验证写成 HTTP Client Hints 已完整支持。[该版本 Electron 源码](https://github.com/electron/electron/blob/v44.4.5/shell/browser/electron_browser_context.cc) 的 `GetClientHintsControllerDelegate` 返回空指针，相关支持需在内核阶段实现。
 - UA 字符串报 `Chrome/<版本>`，但 `navigator.userAgentData` 的 brands / fullVersionList 只有 `Chromium`（加 GREASE 项），缺 `Google Chrome` 品牌，这是「是 Chromium/Electron 不是 Chrome」的直接信号。空 brands 的子问题（自定义/漂移 UA 触发清空）已由上节 `customMetadata` 修复——brands 不再为空，但仍只有 Chromium + GREASE。补 `Google Chrome` 这轮仍未做：页面可用 CDP `setUserAgentOverride` 的 `userAgentMetadata` 加上 Google Chrome，但 Service Worker 走的是 preload（不下发 metadata 覆盖），只改页面会造成「页面有 Google Chrome、SW 没有」的跨上下文不一致（项目自有的上下文一致性测试会据此判失败）。要一致需要让每个上下文（含 SW 和 Sec-CH-UA 请求头）都带 Google Chrome，与上一条同属内核阶段。
 - 第三方采样中的 Canvas/音频数值不通用，沿用千面现有固定种子扰动，不导入其签名或私有算法。
+- 字体：已安装字体按文字宽度可测，所有实例共用宿主机字体（中文 Windows 上含 SimHei、KaiTi、FangSong、MS Gothic 等），与美国等地区的账号不符，也会把同一台机器上的账号关联起来。网页层无法隐藏，需要内核层按实例过滤字体。
 
 ## 2026-10-21 上下文一致性与 API 行为修复
 
@@ -88,15 +129,30 @@ SharedWorker 使用 Chromium Browser target 的 `Target.setAutoAttach`，通过 
 
 ## 2026-10-15 视口修复验证
 
+### 2026-10-26 网页始终 1:1 显示，不再缩放（issue #10）
+
+此前窗口比模拟屏幕大时（如最大化），自适应页面会被等比放大铺满；固定视口比浏览区域大时、宫格「放大查看」时，页面会被缩小。缩放比例不为 1 时，真实鼠标事件的屏幕坐标与页面坐标对不上：主页面中 `screenX` 的变化是 `clientX` 的 1.14 倍（真实浏览器恒为 1），跨站 iframe 报出的屏幕位置也和它在页面中的位置相差 15–45 像素。在 `ip.net.coffee/cloudflare` 的 Cloudflare 托管验证上用系统真实鼠标实测：缩放 1 时点击一次即通过，1.145（最大化）和 0.829（固定视口大于窗口）时点击后一直停在「需要点击确认」，回到缩放 1 后再次通过。
+
+现在正常浏览和宫格放大查看都按 1:1 显示（`viewport.cjs`）：
+
+- 自适应视口：开启硬件覆盖时，网页区域不超过模拟屏幕，居中显示，多出的区域留空；未开启时随窗口自适应。
+- 固定视口：浏览区域够大时按设定尺寸显示；不够大时随浏览区域变小，不缩小渲染。
+- 宫格小格子仍是缩小预览，排版尺寸与正常浏览一致；点「放大查看」后按放大框尺寸 1:1 重新排版，可以正常点击验证框。
+- 宫格小格子里，Chromium 没有送进跨站 iframe 的鼠标和滚轮（外层网页收到、目标是 `<iframe>` 元素）由千面转交给该 iframe（`tile-input.cjs` + `tile-input-preload.cjs`），HTML 预览、嵌入的登录或支付组件可以在格子里点击和滚动；验证框仍需放大后操作。
+- 环境配置的「一键随机」默认仍保留当前屏幕和像素比；旁边新增「同时随机屏幕」勾选项（本机记住选择），勾选后一键随机也从设备库重新抽取屏幕与像素比，并开启硬件覆盖让网页读到它；手动固定的视口宽高仍保留，抽到的屏幕能容纳它。API `fingerprint-preset` 可传 `randomScreen:true` 实现同样效果。
+- 整套随机（新建、批量、AI 随机、重置环境）只从不小于本机当前显示器的模拟屏幕中选择（`fingerprint-catalog.cjs` 的 `setDisplayProvider`，由 `main.cjs` 提供显示器尺寸）；显示器比库中所有屏幕都大或读不到时沿用完整候选池。这样最大化时不会出现「1280×720 模拟屏幕在 2048×1152 桌面上只占中间一块」的情况。已保存的旧实例不会自动重新随机；模拟屏幕比显示器小的旧实例，最大化后会看到边距，可重新随机。
+
+已知限制：模拟 DPR 与显示器不同时，主页面的 `devicePixelRatio` 是带浮点误差的值（如 `1.0000000149011612`），跨站 iframe 里仍是显示器的真实值（如 `1.25`）。两者都与缩放无关，这次没有改。（后续：浮点误差已由注入脚本修正；2026-10-27 起新方案的 DPR 直接使用本机值，见上文。）
+
 ### 2026-10-21 自适应视口不超过模拟屏幕
 
-当实例开启硬件屏幕覆盖且使用自适应视口时，浏览器窗口/DPI 产生的实际网页视口若大于配置的模拟屏幕，超出的宽、高轴会分别限制到屏幕值；窗口较小时仍使用原生自适应尺寸。此处只限制网页布局视口，不缩小页面文字、不改变 Chromium 缩放或保存的实例尺寸；DPR 按实例配置保留。固定视口继续使用原来的等比适配，宫格视口也受模拟屏幕边界约束。
+（已被 2026-10-26 的 1:1 显示取代：后来改为把视口限制到屏幕后再等比放大铺满窗口，这种放大会让验证框拒绝点击。）当实例开启硬件屏幕覆盖且使用自适应视口时，浏览器窗口/DPI 产生的实际网页视口若大于配置的模拟屏幕，超出的宽、高轴会分别限制到屏幕值；窗口较小时仍使用原生自适应尺寸。此处只限制网页布局视口，不缩小页面文字、不改变 Chromium 缩放或保存的实例尺寸；DPR 按实例配置保留。固定视口继续使用原来的等比适配，宫格视口也受模拟屏幕边界约束。
 
 `npm.cmd run test:viewport-screen` 使用独立临时配置与本机页面，验证 1600×1000 窗口下 1280×720 模拟屏幕、自适应小窗口、DPR 1.25、真实右下角鼠标输入、窗口缩放后的输入内容/文档身份保留，以及宫格尺寸。报告位于 `%TEMP%\\facet-viewport-screen-*\\result.json`。这项尺寸一致性修复不证明任意验证码/风控网站会通过，也没有重启用户正在运行的实例；源码改动需重启应用后生效。
 
 公开 v0.2.13 的整套随机曾将随机屏幕宽高填入实际视口。1050 像素宽的浏览区域遇到 3840×2120 视口时，生产适配逻辑缩至约 27%，已在隔离 Electron 中复现。当前源码默认生成 0×0 自适应，保留显式固定尺寸；不自动改写旧实例。
 
-`node scripts/launch-electron.cjs tests/random-viewport-electron.cjs` 已验证：自适应 DPR 2、抽到 4K 屏幕的整套方案、手动固定 4K 三种情况的实际视口、显示比例及 iframe 鼠标点击。13 项指纹单元测试、真实指纹 UI 保存/新建/跨进程读取、4 项环境重置回归和必需基础检查通过。真实网站验证码点击失败尚未复现，不能据本机 iframe 点击成功宣称验证码问题已修复。
+`node scripts/launch-electron.cjs tests/random-viewport-electron.cjs` 已验证：自适应 DPR 2、抽到 4K 屏幕的整套方案、手动固定 4K 三种情况的实际视口、显示比例及 iframe 鼠标点击。13 项指纹单元测试、真实指纹 UI 保存/新建/跨进程读取、4 项环境重置回归和必需基础检查通过。（当时真实网站验证码点击失败尚未复现；2026-10-26 已在 Cloudflare 托管验证上复现，原因是缩放显示，见上文。）
 
 ## 验证与维护
 
